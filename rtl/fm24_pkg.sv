@@ -15,7 +15,7 @@ package fm24_pkg;
         BUYER = 8'h00,
         SELLER = 8'h01
     } msg_side_e;
-    //define the msg struct
+    //define the [191:0] msg struct
     typedef struct packed {
         logic [7:0] msg_type;
         logic [7:0] side;
@@ -39,4 +39,43 @@ package fm24_pkg;
         logic seq_valid;
     } fm24_valid_t;
 
+    //[159:0] cmd input for book_update
+    typedef struct packed {
+        logic [7:0]  msg_type;
+        logic [7:0]  side;
+        logic [15:0] symbol_id;
+        logic [31:0] price;
+        logic [31:0] qty;
+        logic [31:0] seq;
+    } fm24_cmd_t;
+
+    //top of book output from book_update, index_array mapping in BRAM
+    typedef struct packed {
+        logic [31:0] best_bid_price;
+        logic [31:0] best_bid_qty;
+        logic bid_valid;
+        logic [31:0] best_ask_price;
+        logic [31:0] best_ask_qty;
+        logic ask_valid;
+    } fm24_tob_t;
+
+    //error flags
+    typedef struct packed {
+        logic parse_error; //1 if the msg_type undefined
+        logic seq_error; //1 if there are package lost
+        logic length_error; //tlast arrives at wrong byte
+    } fm24_err_t;
+
+    //helper function 1: check msg type
+    function automatic logic is_valid_msg_type(input logic [7:0] x);
+        return (x == MSG_ADD) || (x == MSG_CANCEL) || (x == MSG_EXECUTE);
+    endfunction
+    //helper function 2: check side
+    function automatic logic is_valid_side(input logic [7:0] x);
+        return (x == BUYER) || (x == SELLER); 
+    endfunction
+    //helper function 3: check remove operation
+    function automatic logic is_remove_op (input logic [7:0] x);
+        return (x == MSG_CANCEL) || (x == MSG_EXECUTE);
+    endfunction
 endpackage
