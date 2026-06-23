@@ -5,10 +5,6 @@
 //output tob ( current best bid / ask)
 module book_update 
     import fm24_pkg::*;
-#(
-    parameter int unsigned BASE_PRICE = 14500,
-    parameter int unsigned WINDOW_SIZE = 1024
-)
 (
     //control signal from parser
     input fm24_valid_t   valid,
@@ -18,9 +14,9 @@ module book_update
     output logic [WINDOW_SIZE - 1 : 0] bid_mask,
     output logic [WINDOW_SIZE - 1 : 0] ask_mask,
     //access to qty of a given address
-    input  logic [$clog2(WINDOW_SIZE)-1 : 0] read_addr_bid,
+    input  logic [ADDR_WIDTH -1 : 0] read_addr_bid,
     output logic [31 : 0]                    read_bid_qty,
-    input  logic [$clog2(WINDOW_SIZE)-1 : 0] read_addr_ask,
+    input  logic [ADDR_WIDTH -1 : 0] read_addr_ask,
     output logic [31 : 0]                    read_ask_qty
 );
 
@@ -35,7 +31,7 @@ module book_update
 
     state_e curr_state, next_state;
 
-    logic [$clog2(WINDOW_SIZE)-1  : 0] addr;
+    logic [ADDR_WIDTH -1 : 0] addr;
     fm24_cmd_t                          reg_cmd;
     logic [31:0]                        old_qty;
 
