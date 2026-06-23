@@ -4,6 +4,10 @@ package fm24_pkg;
     localparam int unsigned MSG_BYTES = 24; //24 bytes msg
     localparam int unsigned MSG_BITS  = MSG_BYTES * 8; //192 bits 
     localparam int unsigned PRICE_SCALE = 100; //actual price * scale = stored price, depend on the precision
+    // book / price window constants
+    localparam int unsigned BASE_PRICE   = 14500;   // window start price (×100)
+    localparam int unsigned WINDOW_SIZE  = 1024;    // number of price levels
+    localparam int unsigned ADDR_WIDTH   = $clog2(WINDOW_SIZE);  // address bits (10)
     //define top 2 bytes
     typedef enum logic [7:0] {
         MSG_ADD = 8'h01,
