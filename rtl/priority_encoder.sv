@@ -17,7 +17,12 @@ module priority_encoder
         best_ask_addr  = '0;
         best_ask_valid = '0;
 
-        // bid: find highest set bit (best bid = highest price)
+        /* 
+        finding best bid: iterate from highest address to lowest(price maps to address)
+        if bid_mask[i] is 1 (bid exists) && best_bid_valid = 0(havent found it yet), update best_bid_valid
+        this will cause 1024 iterations
+        ~0.1ns delay per LUTs -> ~100ns ->about 10MHz frequency
+        */
         for(int i = WINDOW_SIZE-1; i >= 0; i--) begin
             if(bid_mask[i] && !best_bid_valid) begin
                 best_bid_addr  = i;
@@ -25,7 +30,9 @@ module priority_encoder
             end
         end
 
-        // ask: find lowest set bit (best ask = lowest price)
+        /*
+        finding best ask: same as bid, this time iterate from lowest address to highest
+        */
         for(int i = 0; i <= WINDOW_SIZE-1; i++) begin
             if(ask_mask[i] && !best_ask_valid) begin
                 best_ask_addr  = i;
