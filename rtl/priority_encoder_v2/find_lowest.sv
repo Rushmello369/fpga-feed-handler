@@ -4,7 +4,7 @@ use two's complement arithmetic to isolate lowest bit
 convert to binary address and update valid flag
 */
 
-module min_addr (
+module find_lowest (
     input  logic [31:0] mask,
     output logic [4:0]  addr,
     output logic        valid
