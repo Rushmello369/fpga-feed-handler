@@ -1,0 +1,1 @@
+"tb_event_dispatcher" -s "snap_tb_event_dispatcher" -timescale "1ns/1ps" -debug "all" 

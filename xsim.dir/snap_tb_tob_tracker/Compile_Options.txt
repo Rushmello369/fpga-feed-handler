@@ -1,0 +1,1 @@
+"tb_tob_tracker" -s "snap_tb_tob_tracker" -timescale "1ns/1ps" -debug "all" 

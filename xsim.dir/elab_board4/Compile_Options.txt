@@ -1,0 +1,1 @@
+"top_board" "glbl" -s "elab_board4" -timescale "1ns/1ps" -L "unisims_ver" -L "secureip" 
