@@ -130,11 +130,21 @@ def cmd_calibrate(args):
             return 1
     print(f"stock_locate({args.ticker}) = {locate}")
 
-    # 2) scan that symbol's Add prices for the day's range
-    lo, hi, adds, book_msgs, total = None, None, 0, 0, 0
+    # 2) scan that symbol's Add prices. Use a share-weighted price HISTOGRAM,
+    #    not raw min/max: real feeds carry stub/special orders at price 1 and at
+    #    the max 199999.9900, which would blow the window up to nonsense.
+    # The window only needs to cover where the BEST bid/ask traverses, i.e. the
+    # TRADED range - far resting limit orders never become top-of-book, so
+    # dropping them (oow) does not affect the features. So calibrate the window
+    # from trade prints ('P' non-cross trade, 'C' exec-with-price) when present;
+    # fall back to Add prices otherwise. (Add prices span the whole book,
+    # including deep/stub orders, and give a needlessly huge window.)
+    MT_TRADE = ord('P')
+    pxhist = Counter()          # Add prices  (fallback signal)
+    txhist = Counter()          # trade prices (preferred signal)
+    adds, book_msgs = 0, 0
     hist = Counter()
     for body in iter_messages(args.file):
-        total += 1
         if locate_of(body) != locate:
             continue
         mt = body[0]
@@ -142,33 +152,64 @@ def cmd_calibrate(args):
         if mt in BOOK_TYPES:
             book_msgs += 1
         if mt in (MT_ADD, MT_ADD_MPID):
-            px = be(body, 32, 4)
+            pxhist[be(body, 32, 4)] += 1
             adds += 1
-            lo = px if lo is None else min(lo, px)
-            hi = px if hi is None else max(hi, px)
+        elif mt == MT_TRADE or mt == MT_EXEC_PR:   # P / C carry a real trade price
+            txhist[be(body, 32, 4)] += 1
 
     if adds == 0:
         print("ERROR: no Add messages for this locate; cannot calibrate price.")
         return 1
 
-    print(f"messages for this locate: {sum(hist.values())} "
-          f"(book-affecting: {book_msgs})")
-    print("  type histogram:", dict(sorted(hist.items())))
-    print(f"price range: ${lo/PRICE_SCALE:.4f} .. ${hi/PRICE_SCALE:.4f} "
-          f"(raw {lo}..{hi})")
+    # prefer trade prices for the window; need enough samples to be robust
+    if sum(txhist.values()) >= 100:
+        src, src_name = txhist, "trade prints (P/C)"
+    else:
+        src, src_name = pxhist, "add prices (no trades seen)"
+    n_src = sum(src.values())
 
-    # 3) recommend BASE_PRICE / WINDOW_SIZE with ~5% headroom each side
-    span_ticks = (hi - lo) // TICK_SIZE + 1
-    margin = max(span_ticks // 20, 16)          # ~5%, at least 16 ticks
-    base = (lo // TICK_SIZE - margin) * TICK_SIZE
+    # robust range: trim the extreme PCT off each tail (outlier stubs)
+    PCT = args.trim
+    prices = sorted(src)
+    lo_n, hi_n = n_src * PCT, n_src * (1.0 - PCT)
+    cum, p_lo, p_hi, p_med = 0, prices[0], prices[-1], prices[0]
+    for px in prices:
+        prev = cum
+        cum += src[px]
+        if prev < lo_n <= cum:
+            p_lo = px
+        if prev < n_src * 0.5 <= cum:
+            p_med = px
+        if prev < hi_n <= cum:
+            p_hi = px
+
+    print(f"messages for this locate: {sum(hist.values())} "
+          f"(book-affecting: {book_msgs}, adds: {adds}, "
+          f"trades: {sum(txhist.values())})")
+    print("  type histogram:", dict(sorted(hist.items())))
+    print(f"window calibrated from: {src_name}")
+    print(f"robust range (p{PCT*100:.1f}..p{(1-PCT)*100:.1f}): "
+          f"${p_lo/PRICE_SCALE:.2f} .. ${p_hi/PRICE_SCALE:.2f}   "
+          f"median ${p_med/PRICE_SCALE:.2f}")
+
+    # 3) recommend BASE_PRICE / WINDOW_SIZE around the robust range + headroom
+    span_ticks = (p_hi - p_lo) // TICK_SIZE + 1
+    margin = max(span_ticks // 10, 16)          # ~10% headroom, min 16 ticks
+    base = (p_lo // TICK_SIZE - margin) * TICK_SIZE
     if base < 0:
         base = 0
-    need = (hi - base) // TICK_SIZE + 1 + margin
+    need = (p_hi - base) // TICK_SIZE + 1 + margin
     win = 1024
     while win < need:
         win *= 2                                 # power-of-two (radix encoder)
     coverage_lo = base / PRICE_SCALE
     coverage_hi = (base + win * TICK_SIZE) / PRICE_SCALE
+
+    # how many Adds fall outside the recommended window (would be oow drops)
+    oow_adds = sum(c for px, c in pxhist.items()
+                   if px < base or px >= base + win * TICK_SIZE)
+    print(f"  adds outside recommended window: {oow_adds} "
+          f"({100.0*oow_adds/adds:.3f}% -> expected oow rate)")
 
     print()
     print("=== synthesize top_v2 with these parameters ===")
@@ -439,6 +480,9 @@ def main():
     c.add_argument('--ticker', required=True)
     c.add_argument('--locate', type=int, default=None,
                    help='skip ticker lookup, use this locate directly')
+    c.add_argument('--trim', type=float, default=0.005,
+                   help='fraction of Adds trimmed off each price tail (default '
+                        '0.005 = ignore the extreme 0.5%% stub orders)')
     c.set_defaults(func=cmd_calibrate)
 
     c = sub.add_parser('filter', help='write single-locate framed byte stream')
