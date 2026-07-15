@@ -54,15 +54,16 @@ module order_lookup
     localparam int TABLE_SIZE = (1 << TABLE_BITS);
     localparam int TAG_BITS   = 64 - TABLE_BITS;
 
-    typedef struct packed {
-        logic                 valid;
-        logic [TAG_BITS-1:0]  tag;    // high bits of order_id disambiguate
-        logic [31:0]          price;
-        logic                 side;
-        logic [31:0]          qty;    // remaining live quantity
-    } entry_t;
-
-    entry_t table_mem [TABLE_SIZE];
+    // Fields kept as SEPARATE arrays (not one packed struct array): a single
+    // packed table of 2^14 entries would be ~1.9 Mbit, exceeding Vivado's
+    // 1,000,000-bit per-variable elaboration limit [Synth 8-4556]. Split, each
+    // array is under the limit and infers its own BRAM (which powers up to 0,
+    // so mem_valid starts all-invalid without an explicit reset).
+    logic                mem_valid [TABLE_SIZE];
+    logic [TAG_BITS-1:0] mem_tag   [TABLE_SIZE];   // high order_id bits
+    logic [31:0]         mem_price [TABLE_SIZE];
+    logic                mem_side  [TABLE_SIZE];
+    logic [31:0]         mem_qty   [TABLE_SIZE];   // remaining live quantity
 
     typedef enum logic [1:0] { IDLE, READ, WRITE } state_e;
     state_e curr_state, next_state;
@@ -76,7 +77,12 @@ module order_lookup
     logic                  req_side;
     lookup_op_e            req_op;
 
-    entry_t entry_rd;   // registered read of table_mem[req_index]
+    // registered read of the addressed slot (one per field array)
+    logic                rd_valid;
+    logic [TAG_BITS-1:0] rd_tag;
+    logic [31:0]         rd_price;
+    logic                rd_side;
+    logic [31:0]         rd_qty;
 
     assign busy = (curr_state != IDLE);
 
@@ -122,50 +128,49 @@ module order_lookup
                 end
 
                 READ: begin
-                    entry_rd <= table_mem[req_index];
+                    rd_valid <= mem_valid[req_index];
+                    rd_tag   <= mem_tag[req_index];
+                    rd_price <= mem_price[req_index];
+                    rd_side  <= mem_side[req_index];
+                    rd_qty   <= mem_qty[req_index];
                 end
 
                 WRITE: begin
                     if (req_is_insert) begin
-                        entry_t new_entry;
-                        new_entry.valid = 1'b1;
-                        new_entry.tag   = req_tag;
-                        new_entry.price = req_price;
-                        new_entry.side  = req_side;
-                        new_entry.qty   = req_qty;
-                        // Silent-overwrite collision policy: newest live
-                        // order wins the slot. Evicted order becomes a miss.
-                        table_mem[req_index] <= new_entry;
+                        // Silent-overwrite collision policy: newest live order
+                        // wins the slot. Evicted order becomes a later miss.
+                        mem_valid[req_index] <= 1'b1;
+                        mem_tag[req_index]   <= req_tag;
+                        mem_price[req_index] <= req_price;
+                        mem_side[req_index]  <= req_side;
+                        mem_qty[req_index]   <= req_qty;
                     end else begin
                         logic        hit;
                         logic [31:0] new_qty;
                         logic        removed;
-                        entry_t      updated_entry;
 
-                        hit = entry_rd.valid && (entry_rd.tag == req_tag);
+                        hit = rd_valid && (rd_tag == req_tag);
 
                         if (hit) begin
                             if (req_op == OP_DELETE) begin
                                 new_qty = '0;
                                 removed = 1'b1;
-                                res_delta_qty <= entry_rd.qty;  // all that remained
+                                res_delta_qty <= rd_qty;        // all that remained
                             end else begin
                                 // OP_EXECUTE / OP_CANCEL: remove req_qty shares,
                                 // clamping at zero for safety
-                                new_qty = (entry_rd.qty > req_qty)
-                                            ? (entry_rd.qty - req_qty) : '0;
+                                new_qty = (rd_qty > req_qty)
+                                            ? (rd_qty - req_qty) : '0;
                                 removed = (new_qty == '0);
                                 res_delta_qty <= req_qty;
                             end
 
-                            updated_entry       = entry_rd;
-                            updated_entry.qty   = new_qty;
-                            updated_entry.valid = !removed;   // free the slot when drained
-                            table_mem[req_index] <= updated_entry;
+                            mem_qty[req_index]   <= new_qty;
+                            mem_valid[req_index] <= !removed;  // free slot when drained
 
                             res_hit     <= 1'b1;
-                            res_price   <= entry_rd.price;
-                            res_side    <= entry_rd.side;
+                            res_price   <= rd_price;
+                            res_side    <= rd_side;
                             res_removed <= removed;
                         end else begin
                             res_hit       <= 1'b0;
