@@ -1,1 +1,0 @@
-"tb_book_update" -s "s_tb_book_update" -timescale "1ns/1ps" 

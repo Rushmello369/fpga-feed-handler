@@ -1,1 +1,0 @@
-"tb_top_v2_smoke" -s "snap_smoke" -timescale "1ns/1ps" 

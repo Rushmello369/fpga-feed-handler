@@ -1,1 +1,0 @@
-"tb_itch_parser" -s "snap_tb_itch_parser" -timescale "1ns/1ps" -debug "all" 

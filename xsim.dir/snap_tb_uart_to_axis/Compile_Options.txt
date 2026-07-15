@@ -1,1 +1,0 @@
-"tb_uart_to_axis" -s "snap_tb_uart_to_axis" -timescale "1ns/1ps" -debug "all" 

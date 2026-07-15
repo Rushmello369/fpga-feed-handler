@@ -1,1 +1,0 @@
-"tb_top_uart" -s "snap_tb_top_uart" -timescale "1ns/1ps" -debug "all" 
