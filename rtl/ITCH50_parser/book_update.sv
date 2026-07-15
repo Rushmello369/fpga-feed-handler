@@ -70,7 +70,15 @@ module book_update
     logic [31:0] bid_qty_mem [WINDOW_SIZE];
     logic [31:0] ask_qty_mem [WINDOW_SIZE];
 
-    typedef enum logic [1:0] { IDLE, ADDR, READ, WRITE } state_e;
+    // Address computation is split across TWO cycles (ADDR1/ADDR2) so the
+    // divide-by-TICK_SIZE has a cycle to itself. ADDR1: window check + the
+    // subtract (c_price - BASE); ADDR2: the divide. In-window guarantees the
+    // difference is < WINDOW_SIZE*TICK_SIZE, so `diff` is only DIFF_W bits and
+    // the divider is that much narrower (a full 32-bit /100 was the design's
+    // critical path).
+    localparam int DIFF_W = $clog2(WINDOW_SIZE * TICK_SIZE);
+
+    typedef enum logic [2:0] { IDLE, ADDR1, ADDR2, READ, WRITE } state_e;
     state_e state;
 
     // latched command
@@ -80,7 +88,8 @@ module book_update
     logic              c_side;
 
     // pipeline registers
-    logic [31:0]       lvl_full;    // (price - BASE_PRICE) / TICK, full width
+    logic [DIFF_W-1:0] diff;        // c_price - BASE_PRICE, narrowed (in-window)
+    logic [31:0]       lvl_full;    // diff / TICK, level index
     logic [ADDR_W-1:0] lvl;         // truncated level index
     logic              in_window;
     logic [31:0]       old_qty;     // registered read of the target level
@@ -99,6 +108,7 @@ module book_update
             c_price      <= '0;
             c_qty        <= '0;
             c_side       <= 1'b0;
+            diff         <= '0;
             lvl          <= '0;
             in_window    <= 1'b0;
             old_qty      <= '0;
@@ -120,22 +130,27 @@ module book_update
                         c_price  <= bu_price;
                         c_qty    <= bu_qty;
                         c_side   <= bu_side;
-                        state    <= ADDR;
+                        state    <= ADDR1;
                     end
                 end
 
                 // --------------------------------------------------------
-                // Dedicated stage for window check + constant division so
-                // the divide's mult-shift logic has a full cycle to itself.
-                ADDR: begin
-                    if (c_price >= BASE_PRICE &&
-                        c_price <  BASE_PRICE + WINDOW_SIZE * TICK_SIZE) begin
-                        lvl_full  <= (c_price - BASE_PRICE) / TICK_SIZE;
-                        in_window <= 1'b1;
-                        state     <= READ;
+                // ADDR1: window check + subtract (no divide this cycle).
+                ADDR1: begin
+                    in_window <= (c_price >= BASE_PRICE) &&
+                                 (c_price <  BASE_PRICE + WINDOW_SIZE * TICK_SIZE);
+                    diff      <= c_price - BASE_PRICE;   // valid only if in_window
+                    state     <= ADDR2;
+                end
+
+                // --------------------------------------------------------
+                // ADDR2: the divide, on its own, over the narrowed difference.
+                ADDR2: begin
+                    if (in_window) begin
+                        lvl_full <= diff / TICK_SIZE;
+                        state    <= READ;
                     end else begin
                         oow_count <= oow_count + 1;
-                        in_window <= 1'b0;
                         state     <= IDLE;   // drop silently (counted)
                     end
                 end
