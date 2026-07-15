@@ -15,10 +15,10 @@
  * itch_tools.py before synthesis.
  */
 module top_board #(
-    parameter int unsigned BASE_PRICE    = 1_550_000,
-    parameter int unsigned WINDOW_SIZE   = 2048,
+    parameter int unsigned BASE_PRICE    = 1_610_800,
+    parameter int unsigned WINDOW_SIZE   = 1024,
     parameter bit          FILTER_EN     = 1'b1,
-    parameter logic [15:0] FILTER_LOCATE = 16'd1,
+    parameter logic [15:0] FILTER_LOCATE = 16'd14,
     parameter int unsigned QTY_SHIFT     = 0,
     parameter int          TABLE_BITS    = 14
 )(
