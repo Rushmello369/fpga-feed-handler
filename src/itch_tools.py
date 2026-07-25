@@ -256,13 +256,26 @@ def sat16(x):
 class Golden:
     """Bit-exact software mirror of the v2 feature pipeline for one instrument."""
 
-    def __init__(self, base, window, qty_shift=0, mom_depth=8, tflow_depth=16):
+    def __init__(self, base, window, qty_shift=0, mom_depth=8, tflow_depth=16,
+                 table_bits=14):
         self.BASE, self.WIN, self.QS = base, window, qty_shift
         self.MOM_DEPTH, self.TFLOW_DEPTH = mom_depth, tflow_depth
         # book: level -> qty, per side
         self.bid, self.ask = {}, {}
-        # order table: oid -> [price, side, qty]
-        self.table = {}
+        # Order table: must mirror order_lookup.sv EXACTLY - a DIRECT-INDEXED
+        # cache (index = low TABLE_BITS of order_id, tag = the high bits), with
+        # silent overwrite on collision. A perfect dict here would be wrong:
+        # real ITCH order_ids collide in the low bits, the hardware evicts the
+        # older order, and a later query against the evicted id misses (the
+        # event is then dropped, not applied to the book). Modelling this is
+        # required for bit-exact agreement with the FPGA.
+        self.TB    = table_bits
+        self.TMASK = (1 << table_bits) - 1
+        self.t_valid = [False] * (1 << table_bits)
+        self.t_tag   = [0]     * (1 << table_bits)
+        self.t_price = [0]     * (1 << table_bits)
+        self.t_side  = [0]     * (1 << table_bits)
+        self.t_qty   = [0]     * (1 << table_bits)
         # feature_engine persistent state
         self.prev_bid_q = 0
         self.prev_ask_q = 0
@@ -276,6 +289,22 @@ class Golden:
         self.oow = 0
         self.miss = 0
         self.frames = []            # list of dicts, one per emitted frame
+
+    # -- order table helpers (mirror order_lookup.sv) ----------------------
+    def _tbl_insert(self, oid, price, side, qty):
+        i = oid & self.TMASK
+        self.t_valid[i] = True          # silent overwrite: newest order wins
+        self.t_tag[i]   = oid >> self.TB
+        self.t_price[i] = price
+        self.t_side[i]  = side
+        self.t_qty[i]   = qty
+
+    def _tbl_find(self, oid):
+        """Return slot index if this oid is live in the table, else None."""
+        i = oid & self.TMASK
+        if self.t_valid[i] and self.t_tag[i] == (oid >> self.TB):
+            return i
+        return None
 
     # -- book helpers ------------------------------------------------------
     def _level(self, price):
@@ -344,47 +373,50 @@ class Golden:
     def apply(self, ev):
         mt = ev['type']
         if mt in (MT_ADD, MT_ADD_MPID):
-            self.table[ev['oid']] = [ev['price'], ev['side'], ev['shares']]
+            self._tbl_insert(ev['oid'], ev['price'], ev['side'], ev['shares'])
             self._commit(ev['side'], ev['price'], +ev['shares'])
 
         elif mt in (MT_EXEC, MT_EXEC_PR, MT_CANCEL):
-            e = self.table.get(ev['oid'])
-            if e is None:
+            i = self._tbl_find(ev['oid'])
+            if i is None:                       # evicted / never seen -> dropped
                 self.miss += 1
                 return
-            price, side, qty = e
+            price, side, qty = self.t_price[i], self.t_side[i], self.t_qty[i]
             delta = ev['shares']               # res_delta_qty = message shares
             if mt in (MT_EXEC, MT_EXEC_PR):     # trade tap: executions only
                 self._trade(side, delta)
-            e[2] = max(0, qty - delta)
-            if e[2] == 0:
-                del self.table[ev['oid']]
+            new_qty = qty - delta if qty > delta else 0
+            self.t_qty[i]   = new_qty
+            self.t_valid[i] = (new_qty != 0)    # free the slot when drained
             self._commit(side, price, -delta)
 
         elif mt == MT_DELETE:
-            e = self.table.get(ev['oid'])
-            if e is None:
+            i = self._tbl_find(ev['oid'])
+            if i is None:
                 self.miss += 1
                 return
-            price, side, qty = e
-            del self.table[ev['oid']]
+            price, side, qty = self.t_price[i], self.t_side[i], self.t_qty[i]
+            self.t_valid[i] = False
+            self.t_qty[i]   = 0
             self._commit(side, price, -qty)     # remove all remaining
 
         elif mt == MT_REPLACE:
-            e = self.table.get(ev['oid'])       # step 1: delete OLD id
-            if e is None:
-                self.miss += 1
+            i = self._tbl_find(ev['oid'])       # step 1: delete OLD id
+            if i is None:
+                self.miss += 1                  # side unknown -> step 2 aborted
                 return
-            price, side, qty = e
-            del self.table[ev['oid']]
+            price, side, qty = self.t_price[i], self.t_side[i], self.t_qty[i]
+            self.t_valid[i] = False
+            self.t_qty[i]   = 0
             self._commit(side, price, -qty)     # remove all remaining (frame A)
             # step 2: insert NEW id at new price/qty, side inherited
-            self.table[ev['new_oid']] = [ev['price'], side, ev['shares']]
+            self._tbl_insert(ev['new_oid'], ev['price'], side, ev['shares'])
             self._commit(side, ev['price'], +ev['shares'])   # add (frame B)
 
 
 def cmd_golden(args):
-    g = Golden(args.base, args.window, qty_shift=args.qty_shift)
+    g = Golden(args.base, args.window, qty_shift=args.qty_shift,
+               table_bits=args.table_bits)
     n = 0
     for body in iter_messages(args.file, limit=args.limit):
         if args.locate is not None and locate_of(body) != args.locate:
@@ -498,6 +530,9 @@ def main():
     c.add_argument('--base', type=int, required=True)
     c.add_argument('--window', type=int, required=True)
     c.add_argument('--qty-shift', type=int, default=0)
+    c.add_argument('--table-bits', type=int, default=14,
+                   help='order_lookup TABLE_BITS in the bitstream (default 14); '
+                        'must match, or collisions/evictions will differ')
     c.add_argument('--out', default=None, help='CSV output path')
     c.add_argument('--limit', type=int, default=None,
                    help='stop after N raw messages')
