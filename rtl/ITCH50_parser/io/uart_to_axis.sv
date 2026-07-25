@@ -23,7 +23,12 @@ module uart_to_axis #(
     output logic       m_tvalid,
     input  logic       m_tready,
 
-    output logic       overflow      // FIFO overrun (diagnostic; expect 0)
+    output logic       overflow,     // FIFO overrun (diagnostic; expect 0)
+    output logic       rx_byte_seen  // 1-cycle pulse per raw UART byte decoded,
+                                      // BEFORE the FIFO/backpressure - proves
+                                      // bytes are physically reaching this FPGA
+                                      // regardless of what the downstream core
+                                      // does with them. Bring-up diagnostic.
 );
 
     logic [7:0] rx_data;
@@ -33,6 +38,8 @@ module uart_to_axis #(
         .clk(clk), .arstn(arstn), .rx(rx),
         .o_data(rx_data), .o_valid(rx_valid)
     );
+
+    assign rx_byte_seen = rx_valid;
 
     logic empty;
     assign m_tvalid = ~empty;

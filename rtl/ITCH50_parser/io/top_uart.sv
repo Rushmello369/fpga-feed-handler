@@ -32,7 +32,10 @@ module top_uart #(
     output logic uart_tx_pin,  // to   PC (FPGA output)
 
     // optional bring-up diagnostics (LEDs)
-    output logic rx_overflow
+    output logic rx_overflow,
+    output logic rx_byte_seen   // 1-cyc pulse per raw UART byte (pre-FIFO,
+                                 // pre-core) - proves bytes reach the FPGA
+                                 // regardless of downstream logic state
 );
     localparam int CPB = CLK_FREQ_HZ / BAUD;
 
@@ -43,7 +46,7 @@ module top_uart #(
     uart_to_axis #(.CLKS_PER_BIT(CPB)) u_in (
         .clk(clk), .arstn(arstn), .rx(uart_rx_pin),
         .m_tdata(s_tdata), .m_tvalid(s_tvalid), .m_tready(s_tready),
-        .overflow(rx_overflow)
+        .overflow(rx_overflow), .rx_byte_seen(rx_byte_seen)
     );
 
     // ---- core pipeline ----

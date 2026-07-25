@@ -26,7 +26,17 @@ module top_board #(
     input  logic sys_clk_n,
     input  logic uart_rx_pin,   // from CP2102 TXD (PC -> FPGA)
     output logic uart_tx_pin,   // to   CP2102 RXD (FPGA -> PC)
-    output logic rx_overflow    // LED: FIFO overrun (should stay 0)
+    output logic rx_overflow,   // LED1(M13): FIFO overrun (should stay 0)
+
+    // ---- bring-up diagnostics, independent of the ITCH parsing logic ----
+    // heartbeat_led  (LED2/K14): blinks ~3Hz iff clk100 is running AND arstn
+    //   is released, i.e. the MMCM actually locked. Steady on/off = clock/reset
+    //   problem upstream of everything else - stop debugging further down.
+    // rx_activity_led(LED3/K13): stretched ~0.25s per raw UART byte the FPGA's
+    //   receiver decodes, BEFORE the FIFO/core - proves bytes are physically
+    //   reaching this chip regardless of what the ITCH pipeline does with them.
+    output logic heartbeat_led,
+    output logic rx_activity_led
 );
 
     // ---- 200 MHz differential input -> single-ended ----
@@ -71,6 +81,8 @@ module top_board #(
     assign arstn = rst_sr[3];
 
     // ---- pipeline + UART ----
+    logic rx_byte_seen;
+
     top_uart #(
         .CLK_FREQ_HZ  (100_000_000),
         .BAUD         (1_000_000),
@@ -84,7 +96,26 @@ module top_board #(
         .clk(clk100), .arstn(arstn),
         .uart_rx_pin(uart_rx_pin),
         .uart_tx_pin(uart_tx_pin),
-        .rx_overflow(rx_overflow)
+        .rx_overflow(rx_overflow),
+        .rx_byte_seen(rx_byte_seen)
     );
+
+    // ---- heartbeat: proves clk100 alive + arstn released (MMCM locked) ----
+    logic [25:0] hb_cnt;
+    always_ff @(posedge clk100) begin
+        if (!arstn) hb_cnt <= '0;
+        else        hb_cnt <= hb_cnt + 1'b1;
+    end
+    assign heartbeat_led = hb_cnt[25];   // ~1.5s period, unmistakably a blink
+
+    // ---- rx activity: stretch each raw UART byte into a visible flash ----
+    localparam int STRETCH = 100_000_000 / 4;   // ~0.25s at 100MHz
+    logic [$clog2(STRETCH)-1:0] act_cnt;
+    always_ff @(posedge clk100) begin
+        if (!arstn)             act_cnt <= '0;
+        else if (rx_byte_seen)  act_cnt <= STRETCH[$clog2(STRETCH)-1:0] - 1'b1;
+        else if (act_cnt != 0)  act_cnt <= act_cnt - 1'b1;
+    end
+    assign rx_activity_led = (act_cnt != 0);
 
 endmodule

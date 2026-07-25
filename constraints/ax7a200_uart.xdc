@@ -3,7 +3,7 @@
 ## Pins taken from the AX7A200 user guide:
 ##   200 MHz differential system clock : SYS_CLK_P = R4 , SYS_CLK_N = T4 (BANK34)
 ##   USB-UART (CP2102GM)               : UART1_RXD = L14, UART1_TXD  = L15
-##   User LED1                         : M13
+##   User LED1 / LED2 / LED3            : M13 / K14 / K13
 ## NOTE: BANK34 is shared with DDR3 (VCCO = 1.5 V) -> clock uses DIFF_SSTL15.
 ##       Cross-check IOSTANDARD/VCCO against ALINX's official XDC for your board.
 ## =============================================================================
@@ -22,10 +22,18 @@ set_property -dict {PACKAGE_PIN L15 IOSTANDARD LVCMOS33} [get_ports uart_tx_pin]
 ## ---- FIFO-overflow indicator on user LED1 ----
 set_property -dict {PACKAGE_PIN M13 IOSTANDARD LVCMOS33} [get_ports rx_overflow]
 
+## ---- bring-up diagnostics: heartbeat (LED2) + rx-byte-seen (LED3) ----
+## heartbeat_led   : blinks ~3Hz iff clk100 alive + MMCM locked (reset released)
+## rx_activity_led : flashes ~0.25s per raw UART byte the FPGA physically receives
+set_property -dict {PACKAGE_PIN K14 IOSTANDARD LVCMOS33} [get_ports heartbeat_led]
+set_property -dict {PACKAGE_PIN K13 IOSTANDARD LVCMOS33} [get_ports rx_activity_led]
+
 ## ---- async UART inputs: don't time them against the core clock ----
 set_false_path -from [get_ports uart_rx_pin]
 set_false_path -to [get_ports uart_tx_pin]
 set_false_path -to [get_ports rx_overflow]
+set_false_path -to [get_ports heartbeat_led]
+set_false_path -to [get_ports rx_activity_led]
 
 ## ---- bitstream / config bank (ALINX A7 boards: 3.3 V config) ----
 set_property CFGBVS VCCO [current_design]
