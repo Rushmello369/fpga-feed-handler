@@ -24,6 +24,10 @@ module top_board #(
 )(
     input  logic sys_clk_p,
     input  logic sys_clk_n,
+    // Board RESET push-button (F15), active-low. Clears the whole pipeline -
+    // order table, book, feature state and all diagnostic counters - giving a
+    // clean slate between replay runs without re-programming the device.
+    input  logic rst_btn_n,
     input  logic uart_rx_pin,   // from CP2102 TXD (PC -> FPGA)
     output logic uart_tx_pin,   // to   CP2102 RXD (FPGA -> PC)
     output logic rx_overflow,   // LED1(M13): FIFO overrun (should stay 0)
@@ -71,12 +75,22 @@ module top_board #(
     BUFG u_bufg_clk (.I(clk100_pre), .O(clk100));
     BUFG u_bufg_fb  (.I(clkfb_pre),  .O(clkfb));
 
-    // ---- reset: hold low until the clock is stable ----
+    // ---- reset: released once the clock is stable, re-asserted by the button ----
+    // Sources: (1) MMCM not yet locked - never run on an unstable clock;
+    //          (2) the debounced RESET button - manual clean slate.
+    // Release is synchronous (shift register) so every flop leaves reset on the
+    // same edge; assertion is immediate.
+    logic btn_reset;
+    button_debounce #(.STABLE_CYCLES(1_000_000)) u_btn (   // 10 ms
+        .clk(clk100), .btn_raw_n(rst_btn_n), .pressed(btn_reset)
+    );
+
     logic [3:0] rst_sr;
     logic       arstn;
     always_ff @(posedge clk100 or negedge locked) begin
-        if (!locked) rst_sr <= 4'b0000;
-        else         rst_sr <= {rst_sr[2:0], 1'b1};
+        if (!locked)        rst_sr <= 4'b0000;
+        else if (btn_reset) rst_sr <= 4'b0000;   // held low while pressed
+        else                rst_sr <= {rst_sr[2:0], 1'b1};
     end
     assign arstn = rst_sr[3];
 
