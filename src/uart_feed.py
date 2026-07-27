@@ -34,36 +34,68 @@ SYNC = 0xA5
 FRAME_LEN = 15
 FIELDS = ["spr", "tobi", "ofi", "emadev", "mom", "tflow"]
 
+# diagnostic status frame (status_reporter.sv): distinct sync, 31 bytes,
+# emitted once the FPGA sees the RX line go quiet at the end of a burst
+STATUS_SYNC = 0x5A
+STATUS_LEN = 31
+STATUS_FIELDS = ["msg", "unknown", "filtered", "miss", "oow", "drop", "parse_err"]
+
+
+def _xor(bs):
+    c = 0
+    for b in bs:
+        c ^= b
+    return c
+
 
 class FrameDecoder:
-    """Resynchronizing 15-byte frame decoder with XOR checksum validation."""
+    """Resynchronizing decoder for both frame types, XOR-checksum validated.
+
+    Feature frames (0xA5, 15B) are yielded from feed(); status frames
+    (0x5A, 31B) are collected into .status. Both syncs are scanned for, and a
+    bad checksum just advances one byte, so a frame type appearing inside the
+    other's payload cannot desynchronise the stream.
+    """
 
     def __init__(self):
         self.buf = bytearray()
         self.bad = 0
+        self.status = []          # decoded status frames, in arrival order
 
     def feed(self, data):
-        """Append bytes; yield dict per valid frame."""
+        """Append bytes; yield dict per valid FEATURE frame."""
         self.buf.extend(data)
         while True:
-            # drop bytes until a sync marker is at the head
-            i = self.buf.find(SYNC)
-            if i < 0:
+            # find the earliest candidate of either frame type
+            i_f = self.buf.find(SYNC)
+            i_s = self.buf.find(STATUS_SYNC)
+            cands = [x for x in (i_f, i_s) if x >= 0]
+            if not cands:
                 self.buf.clear()
                 return
+            i = min(cands)
             if i > 0:
                 del self.buf[:i]
-            if len(self.buf) < FRAME_LEN:
+
+            kind_status = (self.buf[0] == STATUS_SYNC)
+            need = STATUS_LEN if kind_status else FRAME_LEN
+            if len(self.buf) < need:
                 return
-            frame = bytes(self.buf[:FRAME_LEN])
-            chk = 0
-            for b in frame[:14]:
-                chk ^= b
-            if chk != frame[14]:
-                # bad checksum: not a real frame boundary, skip this sync byte
+
+            frame = bytes(self.buf[:need])
+            if _xor(frame[:need-1]) != frame[need-1]:
+                # not a real frame boundary here: skip this sync byte and rescan
                 self.bad += 1
                 del self.buf[0]
                 continue
+
+            if kind_status:
+                vals = struct.unpack(">7I", frame[2:30])
+                self.status.append(dict(seq=frame[1],
+                                        **dict(zip(STATUS_FIELDS, vals))))
+                del self.buf[:need]
+                continue
+
             vals = struct.unpack(">6h", frame[2:14])
             del self.buf[:FRAME_LEN]
             yield dict(seq=frame[1], **dict(zip(FIELDS, vals)))
@@ -78,15 +110,27 @@ def _make_frame(seq, spr, tobi, ofi, emadev, mom, tflow):
     return body + bytes([chk])
 
 
+def _make_status(seq, counters):
+    body = bytes([STATUS_SYNC, seq & 0xFF]) + struct.pack(">7I", *counters)
+    return body + bytes([_xor(body)])
+
+
 def cmd_selftest(_args):
     frames = [
         dict(seq=0, spr=2, tobi=100, ofi=100, emadev=0, mom=1002, tflow=0),
         dict(seq=1, spr=2, tobi=50,  ofi=-50, emadev=0, mom=1002, tflow=-50),
     ]
+    exp_status = (0x1234, 7, 0xABCDEF, 8, 0xE5, 0, 0x5678)
+
     stream = b"\x00\xffnoise"        # junk before sync to test resync
-    for f in frames:
-        stream += _make_frame(f["seq"], f["spr"], f["tobi"], f["ofi"],
-                              f["emadev"], f["mom"], f["tflow"])
+    stream += _make_frame(frames[0]["seq"], frames[0]["spr"], frames[0]["tobi"],
+                          frames[0]["ofi"], frames[0]["emadev"],
+                          frames[0]["mom"], frames[0]["tflow"])
+    # a status frame interleaved between feature frames must not disturb them
+    stream += _make_status(3, exp_status)
+    stream += _make_frame(frames[1]["seq"], frames[1]["spr"], frames[1]["tobi"],
+                          frames[1]["ofi"], frames[1]["emadev"],
+                          frames[1]["mom"], frames[1]["tflow"])
     stream += b"\xa5\x01bad"          # false sync w/ wrong checksum
 
     dec = FrameDecoder()
@@ -98,6 +142,19 @@ def cmd_selftest(_args):
             print("  MISMATCH", g, "vs", exp)
     for g in got:
         print("  frame:", g)
+
+    # status frame decoded correctly?
+    if len(dec.status) != 1:
+        ok = False
+        print(f"  STATUS: expected 1 frame, got {len(dec.status)}")
+    else:
+        s = dec.status[0]
+        got_tuple = tuple(s[k] for k in STATUS_FIELDS)
+        if s["seq"] != 3 or got_tuple != exp_status:
+            ok = False
+            print(f"  STATUS MISMATCH: {s}")
+        print("  status:", s)
+
     print("SELFTEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -147,6 +204,23 @@ def cmd_run(args):
     dt = time.time() - t0
     print(f"received {len(frames)} frames in {dt:.2f}s  "
           f"(decoder rejected {dec.bad} bad-sync bytes)")
+
+    # FPGA-reported counters (status_reporter fires once the RX line goes quiet)
+    if dec.status:
+        s = dec.status[-1]
+        print(f"FPGA counters [status seq={s['seq']}]: "
+              f"msg={s['msg']} unknown={s['unknown']} filtered={s['filtered']} "
+              f"miss={s['miss']} oow={s['oow']} drop={s['drop']} "
+              f"parse_err={s['parse_err']}")
+        if s['drop']:
+            print(f"  NOTE: {s['drop']} feature vectors dropped (link "
+                  f"bandwidth) - expect fewer frames than the golden model")
+        if s['parse_err']:
+            print(f"  WARNING: {s['parse_err']} parse errors - upstream framing "
+                  f"may be misaligned")
+    else:
+        print("FPGA counters: none received "
+              "(needs a bitstream with status_reporter)")
 
     if args.recv_csv:
         with open(args.recv_csv, "w") as f:

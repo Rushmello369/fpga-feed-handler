@@ -18,6 +18,9 @@
 module top_uart #(
     parameter int          CLK_FREQ_HZ   = 100_000_000,
     parameter int          BAUD          = 921_600,
+    // status frame is emitted once the RX line has been quiet this long
+    // (~10 ms at 100 MHz); the testbench overrides it with a tiny value
+    parameter int          STATUS_IDLE_CYCLES = 1_000_000,
     // ---- instrument/day calibration (from itch_tools.py) ----
     parameter int unsigned BASE_PRICE    = 1_550_000,
     parameter int unsigned WINDOW_SIZE   = 2048,
@@ -70,10 +73,42 @@ module top_uart #(
         .miss_count(miss_count), .oow_count(oow_count), .drop_count(drop_count)
     );
 
+    // ---- diagnostic status frames -------------------------------------
+    // parse_error is a 1-cycle pulse; accumulate it so the host sees a count
+    logic [31:0] parse_err_count;
+    always_ff @(posedge clk) begin
+        if (!arstn)          parse_err_count <= '0;
+        else if (parse_error) parse_err_count <= parse_err_count + 1'b1;
+    end
+
+    logic [7:0] st_data;
+    logic       st_valid, st_ready;
+
+    status_reporter #(.IDLE_CYCLES(STATUS_IDLE_CYCLES)) u_status (
+        .clk(clk), .arstn(arstn),
+        .rx_byte_seen(rx_byte_seen),
+        .msg_count(msg_count), .unknown_count(unknown_count),
+        .filtered_count(filtered_count), .miss_count(miss_count),
+        .oow_count(oow_count), .drop_count(drop_count),
+        .parse_err_count(parse_err_count),
+        .m_tdata(st_data), .m_tvalid(st_valid), .m_tready(st_ready)
+    );
+
+    // ---- arbitrate feature vs status frames onto the single UART TX ----
+    logic [7:0] out_data;
+    logic       out_valid, out_ready;
+
+    axis_arb2 u_arb (
+        .clk(clk), .arstn(arstn),
+        .s0_tdata(tx_data), .s0_tvalid(tx_valid), .s0_tready(tx_ready),
+        .s1_tdata(st_data), .s1_tvalid(st_valid), .s1_tready(st_ready),
+        .m_tdata(out_data), .m_tvalid(out_valid), .m_tready(out_ready)
+    );
+
     // ---- stream -> UART out ----
     axis_to_uart #(.CLKS_PER_BIT(CPB)) u_out (
         .clk(clk), .arstn(arstn),
-        .s_tdata(tx_data), .s_tvalid(tx_valid), .s_tready(tx_ready),
+        .s_tdata(out_data), .s_tvalid(out_valid), .s_tready(out_ready),
         .tx(uart_tx_pin)
     );
 
