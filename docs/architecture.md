@@ -41,7 +41,8 @@ ITCH字节流（当前UART bring-up，目标XDMA/MAC）→ ITCH50解析器 → �
 | PCIe/XDMA 端点 | 未开始 | — |
 | 板间链路 RX | 未开始 | `hardware/pynq_z1/rtl/board_link_rx/` |
 | Pynq Z1 board_link_rx + FINN overlay | 未开始 | — |
-| ML 数据集/baseline/QAT/FINN | 仅有早期 EDA，正式 ITCH50 流程未开始 | `ml/` |
+| ML 特征数据构建 | 已实现流式 CSV、metadata 和完整性检查，待真实 ITCH 数据验证 | `ml/data/build_itch_dataset.py` |
+| baseline/QAT/FINN | 未开始 | `ml/training/`, `ml/quantization/`, `ml/finn_build/` |
 | software/backtest、host_pcie_driver、market_simulator | 未开始 | — |
 
 ## 已知的架构债务

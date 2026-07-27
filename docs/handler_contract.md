@@ -176,6 +176,11 @@ python hardware/ax7a200b/src/itch_tools.py selftest
 timestamp，CSV 字段名为 `timestamp_ns`，含义为当日午夜以来的纳秒数。Replace
 事件产生的两条 feature frame 使用同一个事件时间戳。
 
+正式训练特征数据通过 `ml/data/build_itch_dataset.py` 生成。该脚本必须直接复用
+本节定义的 Golden model，并为每个 CSV 同时保存包含 handler commit、窗口参数、
+`QTY_SHIFT`、`TABLE_BITS`、消息计数、越界计数和 lookup miss 的 metadata JSON。
+构建器不得复制或重新实现特征公式。
+
 ## 7. 变更规则
 
 以下任一内容发生变化时，必须视为接口变更：
