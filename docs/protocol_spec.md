@@ -1,6 +1,15 @@
-# FM24 消息格式规格
+# FM24 消息格式规格（历史原型）
 
-自定义的 24 字节仿 ITCH 行情消息格式，RTL 侧定义见 [`hardware/ax7a200b/rtl/fm24_pkg.sv`](../hardware/ax7a200b/rtl/fm24_pkg.sv)，Python 侧对应模型见 [`hardware/ax7a200b/src/fm24.py`](../hardware/ax7a200b/src/fm24.py)——两边字段必须保持一致，改一边时记得同步改另一边。
+> **状态：Legacy。** 当前 handler、特征生成和 ML 数据使用 NASDAQ
+> TotalView-ITCH 5.0，权威定义见 [`handler_contract.md`](handler_contract.md)。
+> 本文和 `hardware/ax7a200b/rtl/fm24_parser/` 仅保留用于早期原型回归，不得作为
+> 新训练数据或板间接口依据。
+
+自定义的 24 字节仿 ITCH 行情消息格式，RTL 侧定义见
+[`hardware/ax7a200b/rtl/fm24_parser/fm24_pkg.sv`](../hardware/ax7a200b/rtl/fm24_parser/fm24_pkg.sv)，
+Python 侧对应模型见
+[`hardware/ax7a200b/src/fm24.py`](../hardware/ax7a200b/src/fm24.py)——两边字段必须保持一致，
+改一边时记得同步改另一边。
 
 ## 消息布局（24 字节 / 192 bit，大端）
 
