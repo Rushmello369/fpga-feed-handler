@@ -88,24 +88,31 @@ def locate_of(body):
     return be(body, 1, 2)
 
 
+def timestamp_of(body):
+    """Return the 6-byte ITCH timestamp as nanoseconds since midnight."""
+    return be(body, 5, 6)
+
+
 def parse_event(body):
     """Return a normalized dict for a book-affecting message, else None.
 
-    Keys: type, oid, side (A/F only), price (A/F/U/C), shares, new_oid (U).
+    Every returned event includes ``type`` and ``timestamp_ns``. Other keys are
+    oid, side (A/F only), price (A/F/U/C), shares, and new_oid (U).
     """
     mt = body[0]
+    common = dict(type=mt, timestamp_ns=timestamp_of(body))
     if mt in (MT_ADD, MT_ADD_MPID):
-        return dict(type=mt, oid=be(body, 11, 8),
+        return dict(**common, oid=be(body, 11, 8),
                     side=(SIDE_SELL if body[19] == ord('S') else SIDE_BUY),
                     shares=be(body, 20, 4), price=be(body, 32, 4))
     if mt in (MT_EXEC, MT_EXEC_PR):          # E/C: order_id + executed shares
-        return dict(type=mt, oid=be(body, 11, 8), shares=be(body, 19, 4))
+        return dict(**common, oid=be(body, 11, 8), shares=be(body, 19, 4))
     if mt == MT_CANCEL:                       # X: order_id + cancelled shares
-        return dict(type=mt, oid=be(body, 11, 8), shares=be(body, 19, 4))
+        return dict(**common, oid=be(body, 11, 8), shares=be(body, 19, 4))
     if mt == MT_DELETE:                       # D: order_id only
-        return dict(type=mt, oid=be(body, 11, 8))
+        return dict(**common, oid=be(body, 11, 8))
     if mt == MT_REPLACE:                       # U: old id, new id, new qty, new px
-        return dict(type=mt, oid=be(body, 11, 8), new_oid=be(body, 19, 8),
+        return dict(**common, oid=be(body, 11, 8), new_oid=be(body, 19, 8),
                     shares=be(body, 27, 4), price=be(body, 31, 4))
     return None
 
@@ -285,6 +292,8 @@ class Golden:
         self.tflow_acc = 0
         self.tflow_ring = [0] * tflow_depth
         self.tflow_wr = 0
+        # host-side metadata from the ITCH event currently being applied
+        self.timestamp_ns = 0
         # diagnostics
         self.oow = 0
         self.miss = 0
@@ -358,7 +367,9 @@ class Golden:
 
         tflow = sat16(self.tflow_acc >> self.QS)
 
-        self.frames.append(dict(bid_idx=bi, bid_qty=bq, ask_idx=ai, ask_qty=aq,
+        self.frames.append(dict(timestamp_ns=self.timestamp_ns,
+                                bid_idx=bi, bid_qty=bq,
+                                ask_idx=ai, ask_qty=aq,
                                 spr=spr, tobi=tobi, ofi=ofi, emadev=emadev,
                                 mom=mom, tflow=tflow))
 
@@ -371,6 +382,7 @@ class Golden:
 
     # -- event application (mirrors event_dispatcher) ----------------------
     def apply(self, ev):
+        self.timestamp_ns = ev['timestamp_ns']
         mt = ev['type']
         if mt in (MT_ADD, MT_ADD_MPID):
             self._tbl_insert(ev['oid'], ev['price'], ev['side'], ev['shares'])
@@ -436,10 +448,11 @@ def cmd_golden(args):
 
     if args.out:
         with open(args.out, 'w') as f:
-            f.write("frame,bid_idx,bid_qty,ask_idx,ask_qty,"
+            f.write("frame,timestamp_ns,bid_idx,bid_qty,ask_idx,ask_qty,"
                     "spr,tobi,ofi,emadev,mom,tflow\n")
             for i, fr in enumerate(g.frames):
-                f.write(f"{i},{fr['bid_idx']},{fr['bid_qty']},{fr['ask_idx']},"
+                f.write(f"{i},{fr['timestamp_ns']},"
+                        f"{fr['bid_idx']},{fr['bid_qty']},{fr['ask_idx']},"
                         f"{fr['ask_qty']},{fr['spr']},{fr['tobi']},{fr['ofi']},"
                         f"{fr['emadev']},{fr['mom']},{fr['tflow']}\n")
         print(f"  wrote golden frames -> {args.out}")
@@ -454,10 +467,11 @@ def cmd_golden(args):
 # =============================================================================
 #  selftest  (reproduce the tb_top_v2 smoke scenario)
 # =============================================================================
-def _build_add(oid, side_char, shares, price, locate=1):
+def _build_add(oid, side_char, shares, price, locate=1, timestamp_ns=0):
     b = bytearray(36)
     b[0] = MT_ADD
     b[1:3] = struct.pack('>H', locate)
+    b[5:11] = timestamp_ns.to_bytes(6, 'big')
     b[11:19] = struct.pack('>Q', oid)
     b[19] = ord(side_char)
     b[20:24] = struct.pack('>I', shares)
@@ -466,10 +480,11 @@ def _build_add(oid, side_char, shares, price, locate=1):
     return bytes(b)
 
 
-def _build_exec(oid, shares, locate=1):
+def _build_exec(oid, shares, locate=1, timestamp_ns=0):
     b = bytearray(31)
     b[0] = MT_EXEC
     b[1:3] = struct.pack('>H', locate)
+    b[5:11] = timestamp_ns.to_bytes(6, 'big')
     b[11:19] = struct.pack('>Q', oid)
     b[19:23] = struct.pack('>I', shares)
     return bytes(b)
@@ -478,14 +493,19 @@ def _build_exec(oid, shares, locate=1):
 def cmd_selftest(args):
     # tb_top_v2 smoke: BASE=1,550,000  WINDOW=2048  ($160.00 -> level 500)
     g = Golden(1_550_000, 2048)
-    for body in (_build_add(100, 'B', 300, 1_600_000),   # bid @500  (1-sided)
-                 _build_add(200, 'S', 200, 1_600_200),   # ask @502  -> frame 1
-                 _build_exec(100, 50)):                   # exec buy  -> frame 2
+    for body in (_build_add(100, 'B', 300, 1_600_000,
+                            timestamp_ns=100),             # bid @500 (1-sided)
+                 _build_add(200, 'S', 200, 1_600_200,
+                            timestamp_ns=200),             # ask @502 -> frame 1
+                 _build_exec(100, 50,
+                             timestamp_ns=300)):           # exec buy -> frame 2
         g.apply(parse_event(body))
 
     expect = [
-        dict(spr=2, tobi=100, ofi=100, emadev=0, mom=1002, tflow=0),
-        dict(spr=2, tobi=50,  ofi=-50, emadev=0, mom=1002, tflow=-50),
+        dict(timestamp_ns=200, spr=2, tobi=100, ofi=100,
+             emadev=0, mom=1002, tflow=0),
+        dict(timestamp_ns=300, spr=2, tobi=50, ofi=-50,
+             emadev=0, mom=1002, tflow=-50),
     ]
     ok = (len(g.frames) == 2)
     for got, exp in zip(g.frames, expect):

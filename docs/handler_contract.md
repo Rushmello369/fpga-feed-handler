@@ -172,6 +172,10 @@ python hardware/ax7a200b/src/itch_tools.py selftest
 
 训练数据不得使用 `ml/features/reference_features.py` 生成。该文件只保留用于旧 FM24 原型的历史测试。
 
+`golden --out` 导出的每条 feature frame 必须保留原始 ITCH 事件的 6 字节
+timestamp，CSV 字段名为 `timestamp_ns`，含义为当日午夜以来的纳秒数。Replace
+事件产生的两条 feature frame 使用同一个事件时间戳。
+
 ## 7. 变更规则
 
 以下任一内容发生变化时，必须视为接口变更：
@@ -189,4 +193,3 @@ python hardware/ax7a200b/src/itch_tools.py selftest
 3. `itch_tools.py`；
 4. feature 与 board-link testbench；
 5. ML 数据版本和训练配置。
-
