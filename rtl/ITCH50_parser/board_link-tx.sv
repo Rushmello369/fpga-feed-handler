@@ -68,7 +68,15 @@ module board_link_tx
             // latch an incoming vector; if one is already pending or being
             // sent, the newer one wins (drop-oldest) and we count the drop
             if (feat_valid) begin
-                if (sending || pend_valid) drop_count <= drop_count + 1;
+                // A vector is only DROPPED when it overwrites one that is still
+                // waiting to be framed, i.e. pend_valid. Arriving merely while
+                // `sending` is not a drop: the previous vector has already been
+                // latched into the frame, so this one simply becomes pending and
+                // goes out next. The old `sending || pend_valid` condition
+                // over-counted that harmless case - it reported 2160 drops on a
+                // 200k-message replay in which the frame count proved that not a
+                // single vector was actually lost.
+                if (pend_valid) drop_count <= drop_count + 1;
                 p_spr    <= f_spr;
                 p_tobi   <= f_tobi;
                 p_ofi    <= f_ofi;

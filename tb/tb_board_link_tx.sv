@@ -97,10 +97,18 @@ module tb_board_link_tx;
         rxq.delete();
         drive_feat(16'sd10, 16'sd10, 16'sd10, 16'sd10, 16'sd10, 16'sd10); // starts sending
         repeat (4) @(posedge clk);                     // mid-frame
-        drive_feat(16'sd20, 16'sd20, 16'sd20, 16'sd20, 16'sd20, 16'sd20); // dropped
-        drive_feat(16'sd33, 16'sd33, 16'sd33, 16'sd33, 16'sd33, 16'sd33); // latest wins
+        drive_feat(16'sd20, 16'sd20, 16'sd20, 16'sd20, 16'sd20, 16'sd20); // becomes pending
+        drive_feat(16'sd33, 16'sd33, 16'sd33, 16'sd33, 16'sd33, 16'sd33); // overwrites it
         wait (rxq.size() >= 30);                        // first frame + replacement
-        check("drop-oldest: drop_count=2", drop_count == 32'd2);
+        // EXACTLY ONE vector is lost here, not two. The 10s are already latched
+        // into the frame in flight; the 20s arrive behind them and merely become
+        // pending - nothing is discarded at that point. Only when the 33s arrive
+        // and overwrite the still-pending 20s is a vector actually lost. The
+        // frame assertions below prove it: two frames come out (10s then 33s),
+        // so of the three vectors driven, exactly one never made it to the wire.
+        // This check previously expected 2, matching a drop_count that counted
+        // "arrived while sending" rather than "was discarded".
+        check("drop-oldest: drop_count=1", drop_count == 32'd1);
         // second frame carries the LATEST vector (33s), seq=3
         verify_frame(15, 8'd3, 16'sd33, 16'sd33, 16'sd33, 16'sd33, 16'sd33,
                      16'sd33, "drop");

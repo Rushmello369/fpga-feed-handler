@@ -4,17 +4,15 @@ A parameterised priority encoder that finds the **lowest** and **highest** set
 bit of two wide bitmasks, at 2-cycle latency, closing well above 100 MHz on a
 mid-range Artix-7.
 
-Written for an FPGA limit-order-book engine, where the two masks are per-price-
-level occupancy vectors and the answers are the best ask and the best bid. It
-has no dependency on that context — it is a general "find the extreme set bit
-of a wide vector" block.
+Written for an FPGA LOB engine, where the two masks are per-price-
+level occupancy vectors and the answers are the best ask and the best bid(find highest for bids and find lowest for asks). w
 
 | | |
 |---|---|
 | Latency | 2 clock cycles, fixed, no back-pressure |
 | Throughput | 1 result per cycle (fully pipelined) |
 | Fmax | 161 MHz @ 1024 bits, 126 MHz @ 2048 bits (`xc7a200tfbg484-2`, OOC synthesis) |
-| Resources @ 1024 bits, both sides | 4,546 LUT · 406 FF · 528 CARRY4 · 0 DSP · 0 BRAM |
+| Resources @ 1024 bits, both sides | 4,546 LUT , 406 FF , 528 CARRY4 , 0 DSP , 0 BRAM |
 | Widths supported | Any power-of-two multiple of 32; 1024 and 2048 both built and timed |
 
 ---
@@ -35,8 +33,8 @@ for (int i = WINDOW_SIZE-1; i >= 0; i--)
     if (mask[i] && !found) begin addr = i; found = 1; end
 ```
 
-Correct, readable, and unsynthesisable at speed. `for` inside `always_comb` is
-not a loop — there is no counter in hardware. Synthesis unrolls it into
+The first implementation is correct and readable, but is poor at the speed. `for` inside `always_comb` is
+not a loop - there is no counter in hardware. Synthesis unrolls it into
 `WINDOW_SIZE` physical copies wired **in series**, because iteration *i* reads
 the `found` flag that iteration *i+1* writes. That serial dependency is a carry
 rippling through 1024 stages: **logic depth O(N)**, roughly 100 ns, about
@@ -49,15 +47,15 @@ optimisation directives shortens a 1024-deep dependency chain.
 
 ### 3.1 Two primitives
 
-**Isolate the lowest set bit** — `mask & (~mask + 1)`
+**Isolate the lowest set bit** - `mask & (~mask + 1)`
 
 `~mask + 1` is two's-complement negation. `x & (-x)` leaves exactly one bit
 set: the lowest. Adding 1 to `~x` ripples a carry through the trailing ones of
 `~x` (the trailing zeros of `x`) and stops at `x`'s lowest set bit, so `-x`
 agrees with `x` there and disagrees above it. One incrementer (a dedicated
-carry chain) plus a bitwise AND — **constant depth**.
+carry chain) plus a bitwise AND - **constant depth**.
 
-**One-hot to binary** — five OR-reductions over fixed masks
+**One-hot to binary** - five OR-reductions over fixed masks
 
 ```
 bin[0] = |(oh & 32'hAAAAAAAA);   bin[3] = |(oh & 32'hFF00FF00);
@@ -67,7 +65,7 @@ bin[2] = |(oh & 32'hF0F0F0F0);
 
 Bit *k* of the index is 1 exactly when the set bit lies at a position whose
 index has bit *k* set; each mask enumerates those positions. Every output bit
-is an independent 16-input OR — about two LUT6 levels, no priority logic.
+is an independent 16-input OR - about two LUT6 levels, no priority logic.
 
 ### 3.2 The tree
 
@@ -75,25 +73,8 @@ Finding the lowest set bit is decomposable: split the vector into 32-bit
 groups, let every group solve its own sub-problem **in parallel**, then pick
 the lowest group that reported a hit.
 
-```
-      WINDOW_SIZE-bit vector
-              │ split into NUM_GROUPS groups of 32
-              ▼
-   ┌─────┬─────┬─────┬─ … ─┬─────┐
-   │ L0  │ L0  │ L0  │     │ L0  │   NUM_GROUPS × find_lowest, ALL PARALLEL
-   └──┬──┴──┬──┴──┬──┴─ … ─┴──┬──┘   each -> 5-bit local addr + 1-bit hit
-      ▼     ▼     ▼           ▼
-  ══════════ pipeline register ══════════   cycle 1
-              │
-              ▼   the same two primitives again, on the hit flags
-        grp_oh  = hits & (~hits + 1)
-        grp_sel = onehot2bin_gen(grp_oh)
-        local   = leaf_addr_q[grp_sel]        (NUM_GROUPS-to-1 mux)
-              │
-  ══════════ output register ══════════      cycle 2
-              ▼
-        addr = {grp_sel, local}
-```
+![Ripple chain versus radix-32 tree: 1024 serial stages at 63.7 ns become two
+parallel levels at 12.4 ns](img/radix_tree.svg)
 
 **Depth O(N) → O(log N).** 1024 serial stages become two shallow levels.
 
@@ -180,17 +161,8 @@ corresponds to an input of interest.
 
 ## 6. Timing
 
-```
-        │ cycle 0 │ cycle 1 │ cycle 2 │ cycle 3 │
-clk    ─┘‾‾‾‾‾‾‾└─┘‾‾‾‾‾‾‾└─┘‾‾‾‾‾‾‾└─┘‾‾‾‾‾‾‾└─
-
-vec     ╳══ A ══╳══ B ══╳══ C ══╳══ D ══╳
-                                                   leaves are combinational,
-leaf_q  ╳═══════╳══ A ══╳══ B ══╳══ C ══╳          registered at cycle 1
-
-addr    ╳═══════╳═══════╳══ A ══╳══ B ══╳          A's result appears here
-valid                                              (2 cycles after A)
-```
+![Waveform: vec accepts A, B, C, D on consecutive cycles; addr produces each
+result exactly two cycles later](img/timing.svg)
 
 Fixed 2-cycle latency, one result per cycle, no stall condition and no
 back-pressure path. A new vector may be presented every cycle.
@@ -271,7 +243,7 @@ it cannot reach 100 MHz.)*
 
 ## 8. Verification
 
-`tb_radix_find_lowest` — 14 directed tests, all passing.
+`tb_radix_find_lowest` - 14 directed tests, all passing.
 
 | Case | What it catches |
 |---|---|
@@ -297,7 +269,7 @@ bash tb/run_tb.sh tb_radix_find_lowest \
 
 1. **Parameterisation is functionally untested.** Every test runs at
    `WINDOW_SIZE = 1024`. Synthesis confirms 2048 elaborates, infers the
-   predicted structure, and meets 100 MHz with +2.055 ns to spare — but
+   predicted structure, and meets 100 MHz with +2.055 ns to spare - but
    *building* is not *behaving*. The block's headline claim is width
    independence, and that is precisely the property nothing exercises. The
    testbench is already parameter-clean apart from hardcoded `1024'b1 << N`
@@ -311,7 +283,7 @@ bash tb/run_tb.sh tb_radix_find_lowest \
 ## 9. Design notes
 
 **Why not a comparator tree?** A comparator tree compares *values*. Here the
-input is an occupancy bitmask — the value is implicit in the bit's position, so
+input is an occupancy bitmask - the value is implicit in the bit's position, so
 the leaf operation reduces to two gates (`x & -x`) rather than a magnitude
 comparator, and combining reduces to an OR of hit flags rather than a
 compare-and-select carrying both value and index through every node. A
@@ -340,7 +312,7 @@ away. Nothing to fix.
 
 | File | Contents |
 |---|---|
-| `priority_encoder.sv` | Top wrapper — **use this** |
+| `priority_encoder.sv` | Top wrapper  |
 | `radix_find_lowest.sv` | The parameterised tree |
 | `find_lowest.sv` | 32-bit leaf |
 | `onehot2bin.sv` | Fixed 32→5 encoder |

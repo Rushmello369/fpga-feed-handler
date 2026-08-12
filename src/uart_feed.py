@@ -34,11 +34,26 @@ SYNC = 0xA5
 FRAME_LEN = 15
 FIELDS = ["spr", "tobi", "ofi", "emadev", "mom", "tflow"]
 
-# diagnostic status frame (status_reporter.sv): distinct sync, 31 bytes,
-# emitted once the FPGA sees the RX line go quiet at the end of a burst
+# Diagnostic status frame (status_reporter.sv): distinct sync, emitted once the
+# FPGA sees the RX line go quiet at the end of a burst.
+#
+# STATUS_FIELDS MUST match top_uart.sv's `stat_bus` concatenation exactly,
+# element for element - that assignment is the wire format. Adding a counter
+# means editing both, in the same commit.
 STATUS_SYNC = 0x5A
-STATUS_LEN = 31
-STATUS_FIELDS = ["msg", "unknown", "filtered", "miss", "oow", "drop", "parse_err"]
+STATUS_FIELDS = [
+    # 7 pipeline counters
+    "msg", "unknown", "filtered", "miss", "oow", "drop", "parse_err",
+    # 11 latency-probe results (cycles at 100 MHz -> 10 ns each)
+    "lat_last", "lat_min", "lat_max", "lat_sum", "lat_count",
+    "lat_resolve", "lat_book2tob", "lat_tob2feat",
+    "lat_ia_last", "lat_ia_min", "lat_unmatched",
+]
+STATUS_LEN = 2 + len(STATUS_FIELDS) * 4 + 1     # sync + seq + counters + xor
+
+# lat_min / lat_ia_min power up to 0xFFFFFFFF so the first sample always wins;
+# that value means "no measurement yet", not a real 4.29-billion-cycle latency.
+NO_SAMPLE = 0xFFFF_FFFF
 
 
 def _xor(bs):
@@ -90,7 +105,8 @@ class FrameDecoder:
                 continue
 
             if kind_status:
-                vals = struct.unpack(">7I", frame[2:30])
+                n = len(STATUS_FIELDS)
+                vals = struct.unpack(f">{n}I", frame[2:2 + n * 4])
                 self.status.append(dict(seq=frame[1],
                                         **dict(zip(STATUS_FIELDS, vals))))
                 del self.buf[:need]
@@ -111,7 +127,10 @@ def _make_frame(seq, spr, tobi, ofi, emadev, mom, tflow):
 
 
 def _make_status(seq, counters):
-    body = bytes([STATUS_SYNC, seq & 0xFF]) + struct.pack(">7I", *counters)
+    n = len(STATUS_FIELDS)
+    if len(counters) != n:
+        raise ValueError(f"expected {n} counters, got {len(counters)}")
+    body = bytes([STATUS_SYNC, seq & 0xFF]) + struct.pack(f">{n}I", *counters)
     return body + bytes([_xor(body)])
 
 
@@ -120,7 +139,9 @@ def cmd_selftest(_args):
         dict(seq=0, spr=2, tobi=100, ofi=100, emadev=0, mom=1002, tflow=0),
         dict(seq=1, spr=2, tobi=50,  ofi=-50, emadev=0, mom=1002, tflow=-50),
     ]
-    exp_status = (0x1234, 7, 0xABCDEF, 8, 0xE5, 0, 0x5678)
+    # 7 pipeline counters + 11 latency values, in STATUS_FIELDS order
+    exp_status = (0x1234, 7, 0xABCDEF, 8, 0xE5, 0, 0x5678,
+                  18, 17, 24, 0x4E20, 1000, 12, 5, 1, 38000, 21000, 0)
 
     stream = b"\x00\xffnoise"        # junk before sync to test resync
     stream += _make_frame(frames[0]["seq"], frames[0]["spr"], frames[0]["tobi"],

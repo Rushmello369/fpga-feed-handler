@@ -122,6 +122,93 @@ plus small structures; the 58 BRAMs hold the per-level quantity arrays and the
 verified but **not instantiated in the current bitstream**, so it contributes
 nothing to the timing and resource figures above.
 
+### Differential verification — RTL ≡ golden model ≡ hardware
+
+The strongest evidence in the project, and the one thing unit tests structurally
+cannot provide: they check each module against expectations *written by the same
+person who wrote the module*, so a shared misunderstanding of the ITCH spec
+would pass every one of them. An independent implementation, on real exchange
+data, end to end, is what closes that hole.
+
+Real NASDAQ ITCH 5.0 captures for one instrument (`stock_locate` 14) are pushed
+through both implementations at identical calibration (`BASE_PRICE=1_610_800`,
+`WINDOW_SIZE=1024`, `QTY_SHIFT=0`, `TABLE_BITS=14`):
+
+```bash
+cd hardware/ax7a200b && bash tb/run_diff.sh aapl_200000.bin
+```
+
+| Capture | Messages | Book-affecting | Frames | Feature values | Mismatches |
+|---|---|---|---|---|---|
+| `aapl_small` | 2,000 | 1,831 | 1,592 | 9,552 | **0** |
+| `aapl_50000` | 50,000 | 47,879 | 31,994 | 191,964 | **0** |
+| **`aapl_200000`** | **200,000** | **196,171** | **146,172** | **877,032** | **0** |
+
+Diagnostic counters agree independently at every size — book-affecting message
+count, out-of-window drops, lookup misses, parse errors, dropped frames, bad
+checksums.
+
+### Coverage matters more than volume
+
+The three captures are not merely different sizes; they exercise different
+code:
+
+| Capture | Add | Execute | Delete | Cancel | **Exec-w-Price** | **Replace** |
+|---|---|---|---|---|---|---|
+| `aapl_small` | 914 | 523 | 389 | 5 | **0** | **0** |
+| `aapl_50000` | 32,546 | 4,222 | 10,517 | 26 | 17 | 551 |
+| `aapl_200000` | 110,504 | 12,503 | 62,296 | 550 | **122** | **10,196** |
+
+**The two smallest captures contain no Replace messages at all.** Replace is
+the most intricate path in the design — the dispatcher decomposes it into a
+delete on the old id (which also recovers the side, absent from the wire)
+followed by an insert, and it is where both the `RPL_WAIT` stale-`bu_ready`
+bug and the `tob_tracker` back-to-back race lived. A differential test on
+`aapl_small` passes without touching any of that.
+
+The 200k capture also drives **14,060 order-table evictions**. That is the
+number that matters most: `handler_contract.md` requires the Python model to
+reproduce the direct-mapped table's silent-overwrite behaviour rather than
+substitute an unbounded dictionary, and 14,060 agreeing evictions is what
+demonstrates it does.
+
+### A diagnostic bug this exercise found
+
+At 200k messages the run reported `drop_count = 2160` while emitting exactly
+146,172 frames — the same count as the golden model, with zero mismatches. A
+frame-for-frame match is impossible if 2,160 vectors had genuinely been lost,
+so the counter, not the datapath, was wrong.
+
+`board_link_tx` incremented `drop_count` on `sending || pend_valid`. Arriving
+while `sending` is not a drop: the previous vector has already been latched
+into the frame in flight, so the new one simply becomes pending and goes out
+next. Only overwriting a still-`pend_valid` vector loses anything. The
+condition is now `pend_valid` alone.
+
+`tb_board_link_tx` had encoded the old behaviour, asserting `drop_count == 2`
+for a sequence that drives three vectors and emits two frames — while its
+*own* frame assertions in the same block verified that the second frame
+carries the third vector, proving exactly one was lost. The two assertions
+contradicted each other and the frame assertions were right.
+
+After the fix: `drop_count` 433 → **0** on the 50k capture, with frame count
+and every feature value unchanged. Unit tests 38/38.
+
+#### A caution this exercise produced
+
+An older `golden_small.csv` in the working tree disagrees with hardware from
+frame 138 onward, which initially looked like a correctness bug. It was not:
+that file has 1,599 rows against the correct 1,592 and was generated at
+different parameters, with **no metadata recorded**. The golden model's own
+help warns that `--table-bits` "must match, or collisions/evictions will
+differ", and `handler_contract.md` §6 requires a metadata JSON beside every
+golden CSV — which had not been written for that file.
+
+The lesson is procedural, not technical: **a golden CSV without its parameter
+metadata is not evidence, it is a rumour.** Regenerate rather than trust an
+undated artefact, and never "fix" a reference model to agree with the DUT —
+that destroys the only independent check there is.
+
 ### Verification practice worth noting
 
 Two testbenches were validated by **mutation testing** — deliberately breaking

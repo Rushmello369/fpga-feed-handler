@@ -15,16 +15,26 @@
  * host wants the counters (end of a replay burst), and it cannot corrupt the
  * data path. One frame per burst - had_activity re-arms only after new bytes.
  *
- * FRAME (31 bytes, big-endian, distinct sync from the 0xA5 feature frame):
- *   byte 0     : 0x5A  sync
- *   byte 1     : seq   (rolling, independent of the feature-frame seq)
- *   bytes 2-29 : 7 x uint32 : msg, unknown, filtered, miss, oow, drop, parse_err
- *   byte 30    : XOR of bytes 0..29
+ * FRAME (2 + NCNT*4 + 1 bytes, big-endian, distinct sync from the 0xA5
+ * feature frame):
+ *   byte 0            : 0x5A  sync
+ *   byte 1            : seq   (rolling, independent of the feature-frame seq)
+ *   bytes 2..2+4N-1   : NCNT x uint32, in the order the caller packed them
+ *   last byte         : XOR of all preceding bytes
+ *
+ * The counters arrive as ONE flattened bus rather than named ports. That keeps
+ * this module agnostic about what is being reported: the caller decides both
+ * the count and the order, and adding a counter is a change in top_uart plus
+ * the host decoder, not here. The bus is packed MSB-first so the frame comes
+ * out big-endian by construction, matching every other format in this design.
+ * The host must agree on NCNT and the field order - see uart_feed.py.
  */
 module status_reporter #(
     // ~10 ms at 100 MHz. Must exceed the host's inter-byte gap so a burst is
     // not mistaken for its own end; small values are used by the testbench.
-    parameter int IDLE_CYCLES = 1_000_000
+    parameter int IDLE_CYCLES = 1_000_000,
+    // number of 32-bit counters carried in the frame
+    parameter int NCNT        = 7
 )(
     input  logic        clk,
     input  logic        arstn,
@@ -32,14 +42,8 @@ module status_reporter #(
     // 1-cycle pulse per raw UART byte received (from uart_to_axis)
     input  logic        rx_byte_seen,
 
-    // pipeline diagnostic counters
-    input  logic [31:0] msg_count,
-    input  logic [31:0] unknown_count,
-    input  logic [31:0] filtered_count,
-    input  logic [31:0] miss_count,
-    input  logic [31:0] oow_count,
-    input  logic [31:0] drop_count,
-    input  logic [31:0] parse_err_count,
+    // pipeline diagnostic counters, packed MSB-first by the caller
+    input  logic [NCNT*32-1:0] cnt_bus,
 
     // outbound byte stream (into the TX arbiter)
     output logic [7:0]  m_tdata,
@@ -47,15 +51,9 @@ module status_reporter #(
     input  logic        m_tready
 );
 
-    localparam int NCNT      = 7;
-    localparam int FRAME_LEN = 2 + NCNT*4 + 1;      // 31
+    localparam int FRAME_LEN = 2 + NCNT*4 + 1;
     localparam int IW        = $clog2(FRAME_LEN+1);
     localparam logic [7:0] SYNC_BYTE = 8'h5A;
-
-    // counters packed MSB-first so the frame is big-endian by construction
-    logic [NCNT*32-1:0] cnt_bus;
-    assign cnt_bus = {msg_count, unknown_count, filtered_count,
-                      miss_count, oow_count, drop_count, parse_err_count};
 
     logic [7:0]         frame [FRAME_LEN];
     logic [IW-1:0]      byte_idx;

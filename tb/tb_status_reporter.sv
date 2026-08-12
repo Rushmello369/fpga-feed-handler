@@ -30,13 +30,19 @@ module tb_status_reporter;
     int pass_count = 0, fail_count = 0;
     logic [7:0] rxq [$];
 
-    status_reporter #(.IDLE_CYCLES(IDLE_CYCLES)) dut (
+    // status_reporter now takes one flattened bus instead of named counters, so
+    // the same module can carry any number of them. This testbench keeps NCNT=7
+    // and the original field order, so FRAME_LEN stays 31 and every existing
+    // byte-offset assertion below remains valid.
+    localparam int NCNT = 7;
+    logic [NCNT*32-1:0] cnt_bus;
+    assign cnt_bus = {msg_count, unknown_count, filtered_count,
+                      miss_count, oow_count, drop_count, parse_err_count};
+
+    status_reporter #(.IDLE_CYCLES(IDLE_CYCLES), .NCNT(NCNT)) dut (
         .clk(clk), .arstn(arstn),
         .rx_byte_seen(rx_byte_seen),
-        .msg_count(msg_count), .unknown_count(unknown_count),
-        .filtered_count(filtered_count), .miss_count(miss_count),
-        .oow_count(oow_count), .drop_count(drop_count),
-        .parse_err_count(parse_err_count),
+        .cnt_bus(cnt_bus),
         .m_tdata(m_tdata), .m_tvalid(m_tvalid), .m_tready(m_tready)
     );
 

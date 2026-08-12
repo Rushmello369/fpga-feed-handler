@@ -58,6 +58,9 @@ module top_uart #(
     logic       parse_error;
     logic [31:0] unknown_count, msg_count, filtered_count,
                  miss_count, oow_count, drop_count;
+    logic [31:0] lat_last, lat_min, lat_max, lat_sum, lat_count,
+                 lat_resolve, lat_book2tob, lat_tob2feat,
+                 lat_ia_last, lat_ia_min, lat_unmatched;
 
     top_v2 #(
         .BASE_PRICE(BASE_PRICE), .WINDOW_SIZE(WINDOW_SIZE),
@@ -70,7 +73,13 @@ module top_uart #(
         .parse_error(parse_error),
         .unknown_count(unknown_count), .msg_count(msg_count),
         .filtered_count(filtered_count),
-        .miss_count(miss_count), .oow_count(oow_count), .drop_count(drop_count)
+        .miss_count(miss_count), .oow_count(oow_count), .drop_count(drop_count),
+        .lat_last(lat_last), .lat_min(lat_min), .lat_max(lat_max),
+        .lat_sum(lat_sum), .lat_count(lat_count),
+        .lat_resolve(lat_resolve), .lat_book2tob(lat_book2tob),
+        .lat_tob2feat(lat_tob2feat),
+        .lat_ia_last(lat_ia_last), .lat_ia_min(lat_ia_min),
+        .lat_unmatched(lat_unmatched)
     );
 
     // ---- diagnostic status frames -------------------------------------
@@ -84,13 +93,28 @@ module top_uart #(
     logic [7:0] st_data;
     logic       st_valid, st_ready;
 
-    status_reporter #(.IDLE_CYCLES(STATUS_IDLE_CYCLES)) u_status (
+    // Status-frame payload. THIS ORDER IS THE WIRE FORMAT - uart_feed.py's
+    // STATUS_FIELDS list must match it exactly, element for element. Packed
+    // MSB-first so status_reporter emits it big-endian.
+    localparam int NSTAT = 18;
+    logic [NSTAT*32-1:0] stat_bus;
+    assign stat_bus = {
+        // --- 7 pipeline counters (unchanged, first for backward readability) ---
+        msg_count, unknown_count, filtered_count, miss_count,
+        oow_count, drop_count, parse_err_count,
+        // --- 11 latency probe results ---
+        lat_last, lat_min, lat_max, lat_sum, lat_count,
+        lat_resolve, lat_book2tob, lat_tob2feat,
+        lat_ia_last, lat_ia_min, lat_unmatched
+    };
+
+    status_reporter #(
+        .IDLE_CYCLES(STATUS_IDLE_CYCLES),
+        .NCNT       (NSTAT)
+    ) u_status (
         .clk(clk), .arstn(arstn),
         .rx_byte_seen(rx_byte_seen),
-        .msg_count(msg_count), .unknown_count(unknown_count),
-        .filtered_count(filtered_count), .miss_count(miss_count),
-        .oow_count(oow_count), .drop_count(drop_count),
-        .parse_err_count(parse_err_count),
+        .cnt_bus(stat_bus),
         .m_tdata(st_data), .m_tvalid(st_valid), .m_tready(st_ready)
     );
 

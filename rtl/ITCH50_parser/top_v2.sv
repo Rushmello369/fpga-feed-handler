@@ -49,7 +49,23 @@ module top_v2
     output logic [31:0] filtered_count,
     output logic [31:0] miss_count,
     output logic [31:0] oow_count,
-    output logic [31:0] drop_count
+    output logic [31:0] drop_count,
+
+    // ---- latency instrumentation (pure observation, see latency_probe.sv) ----
+    // t_total is measured from ev_handoff (parser -> dispatcher) to the first
+    // feat_valid it produces, so it excludes the transport entirely and is a
+    // property of the core rather than of whatever is feeding it.
+    output logic [31:0] lat_last,       // t_total, most recent
+    output logic [31:0] lat_min,
+    output logic [31:0] lat_max,
+    output logic [31:0] lat_sum,        // host computes mean = sum / count
+    output logic [31:0] lat_count,
+    output logic [31:0] lat_resolve,    // ev_handoff -> book_updated
+    output logic [31:0] lat_book2tob,   // book_updated -> tob_valid (expect 5)
+    output logic [31:0] lat_tob2feat,   // tob_valid -> feat_valid  (expect 1)
+    output logic [31:0] lat_ia_last,    // interval between events = transport cost
+    output logic [31:0] lat_ia_min,
+    output logic [31:0] lat_unmatched   // events that produced no feature
 );
 
     // ---------------- parser -> dispatcher ----------------
@@ -181,6 +197,33 @@ module top_v2
         .f_emadev(f_emadev), .f_mom(f_mom), .f_tflow(f_tflow),
         .tx_valid(tx_valid), .tx_data(tx_data), .tx_ready(tx_ready),
         .drop_count(drop_count)
+    );
+
+
+    // ---------------- latency instrumentation ----------------
+    // Taps only. No back-pressure, no handshake, nothing downstream depends on
+    // it - deleting this instance cannot change the datapath's behaviour.
+    // ev_handoff is the cycle the parser's event is actually accepted, which is
+    // where a core-only measurement must start.
+    latency_probe u_probe (
+        .clk(clk), .arstn(arstn),
+
+        .ev_handoff  (ev_valid && ev_ready),
+        .book_updated(book_updated),
+        .tob_valid   (tob_valid),
+        .feat_valid  (feat_valid),
+
+        .lat_last     (lat_last),
+        .lat_min      (lat_min),
+        .lat_max      (lat_max),
+        .lat_sum      (lat_sum),
+        .lat_count    (lat_count),
+        .lat_resolve  (lat_resolve),
+        .lat_book2tob (lat_book2tob),
+        .lat_tob2feat (lat_tob2feat),
+        .lat_ia_last  (lat_ia_last),
+        .lat_ia_min   (lat_ia_min),
+        .lat_unmatched(lat_unmatched)
     );
 
 endmodule
