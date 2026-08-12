@@ -23,8 +23,10 @@
  * are dropped and counted in oow_count - watch that counter during bring-up;
  * a nonzero drift means your window is mis-centered.
  *
- * FSM: IDLE -> ADDR -> READ -> WRITE (4 cycles per update, one in flight).
- * Read ports for tob_tracker are registered (1-cycle latency), matching
+ * FSM: IDLE -> ADDR1 -> ADDR2 -> READ -> WRITE (5 cycles per update, one in
+ * flight). The address computation occupies TWO states because the divide got
+ * split off into ADDR2 of its own to close 100 MHz - see the DIFF_W comment
+ * below. Read ports for tob_tracker are registered (1-cycle latency), matching
  * the BRAM inference pattern.
  */
 

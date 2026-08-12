@@ -41,14 +41,19 @@ set design_files [list \
     "$root/rtl/ITCH50_parser/tob_tracker.sv" \
     "$root/rtl/ITCH50_parser/feature_engine.sv" \
     "$root/rtl/ITCH50_parser/board_link-tx.sv" \
+    "$root/rtl/ITCH50_parser/latency_probe.sv" \
     "$root/rtl/ITCH50_parser/top_v2.sv" \
     "$root/rtl/ITCH50_parser/io/uart_rx.sv" \
     "$root/rtl/ITCH50_parser/io/uart_tx.sv" \
     "$root/rtl/ITCH50_parser/io/sync_fifo.sv" \
     "$root/rtl/ITCH50_parser/io/uart_to_axis.sv" \
     "$root/rtl/ITCH50_parser/io/axis_to_uart.sv" \
+    "$root/rtl/ITCH50_parser/io/axis_arb2.sv" \
+    "$root/rtl/ITCH50_parser/io/status_reporter.sv" \
+    "$root/rtl/ITCH50_parser/io/button_debounce.sv" \
     "$root/rtl/ITCH50_parser/io/top_uart.sv" \
     "$root/rtl/ITCH50_parser/io/top_board.sv" \
+    "$root/rtl/eth/eth_crc32.sv" \
 ]
 
 ## ---- constraints ------------------------------------------------------------
@@ -63,11 +68,16 @@ set sim_files [list \
     "$root/tb/tb_order_lookup.sv" \
     "$root/tb/tb_book_update.sv" \
     "$root/tb/tb_tob_tracker.sv" \
+    "$root/tb/tb_tob_tracker_backtoback.sv" \
     "$root/tb/tb_event_dispatcher.sv" \
     "$root/tb/tb_feature_engine.sv" \
     "$root/tb/tb_board_link_tx.sv" \
     "$root/tb/tb_radix_find_lowest.sv" \
+    "$root/tb/tb_latency_probe.sv" \
+    "$root/tb/tb_eth_crc32.sv" \
     "$root/tb/tb_uart_to_axis.sv" \
+    "$root/tb/tb_status_reporter.sv" \
+    "$root/tb/tb_button_debounce.sv" \
     "$root/tb/tb_top_uart.sv" \
 ]
 

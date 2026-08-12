@@ -32,7 +32,6 @@ module tb_tob_tracker_backtoback;
     logic                  best_bid_valid = 0, best_ask_valid = 0;
     logic [ADDR_W-1:0]     bid_rd_addr, ask_rd_addr;
     logic [31:0]           bid_rd_data, ask_rd_data;
-    logic [31:0]           bid_rd_data_in;
     tob_t                  tob;
     logic                  tob_valid;
 
@@ -43,8 +42,7 @@ module tb_tob_tracker_backtoback;
         .book_updated(book_updated),
         .best_bid_addr(best_bid_addr), .best_bid_valid(best_bid_valid),
         .best_ask_addr(best_ask_addr), .best_ask_valid(best_ask_valid),
-        .bid_rd_addr(bid_rd_addr), .bid_rd_data_in(bid_rd_data_in),
-        .bid_rd_data(bid_rd_data),
+        .bid_rd_addr(bid_rd_addr), .bid_rd_data(bid_rd_data),
         .ask_rd_addr(ask_rd_addr), .ask_rd_data(ask_rd_data),
         .tob(tob), .tob_valid(tob_valid)
     );

@@ -43,7 +43,6 @@ module tob_tracker
 
     // qty read ports into book_update
     output logic [ADDR_W-1:0] bid_rd_addr,
-    output logic [31:0]       bid_rd_data_in,   // unused; kept for symmetry
     input  logic [31:0]       bid_rd_data,
     output logic [ADDR_W-1:0] ask_rd_addr,
     input  logic [31:0]       ask_rd_data,
@@ -71,7 +70,13 @@ module tob_tracker
     // reuse that latched copy at t+4, instead of re-sampling the live wires.
     // Verified single-update timing unchanged by tb_tob_tracker.sv, and the
     // back-to-back case by tb_tob_tracker_backtoback.sv.
-    logic [4:0]        upd_shift;
+    // Delay line for the book_updated strobe: bit N is "book_updated was high
+    // N+1 cycles ago". Only two taps are used - [1] at t+2 to launch the reads
+    // once the encoder has settled, and [3] at t+4 to publish - so 4 bits is
+    // exactly the depth required. (It was [4:0]; bit 4 was written every cycle
+    // and never read, which synthesis dropped but which misleads anyone
+    // counting pipeline stages.)
+    logic [3:0]        upd_shift;
     logic [ADDR_W-1:0] lat_bid_addr, lat_ask_addr;
     logic              lat_bid_valid, lat_ask_valid;
 
@@ -87,7 +92,7 @@ module tob_tracker
             tob           <= '0;
             tob_valid     <= 1'b0;
         end else begin
-            upd_shift <= {upd_shift[3:0], book_updated};
+            upd_shift <= {upd_shift[2:0], book_updated};
             tob_valid <= 1'b0;
 
             // t+2 after update: encoder outputs are fresh. Launch the reads
@@ -118,7 +123,5 @@ module tob_tracker
             end
         end
     end
-
-    assign bid_rd_data_in = '0;  // placeholder, port kept for interface symmetry
 
 endmodule
