@@ -43,8 +43,12 @@ module top_board #(
     //     pin K14 -> physical LED3      (NOT LED2)
     //     pin K13 -> physical LED4      (NOT LED3)
     //
-    // rx_overflow_n    (LED2/M13): FIFO overrun. Active-low, so a LIT LED here
-    //   is the healthy state - it means the counter is zero.
+    // rx_overflow_n    (LED2/M13): FIFO overrun, STICKY. Dark = healthy, lit =
+    //   an overrun happened at some point since reset. sync_fifo's `overflow`
+    //   is a 1-cycle pulse - 10 ns - so wiring it straight to a pin produced an
+    //   indicator that could never be seen and therefore always looked healthy.
+    //   An error light has to report "this ever happened", not "this is
+    //   happening right now"; it is latched below and cleared only by reset.
     // heartbeat_n      (LED3/K14): blinks at ~1.5 Hz (0.67 s period) iff clk100
     //   is running AND arstn is released, i.e. the MMCM actually locked. A
     //   steady LED is a clock/reset problem upstream of everything else - stop
@@ -148,6 +152,15 @@ module top_board #(
         else if (act_cnt != 0)  act_cnt <= act_cnt - 1'b1;
     end
     assign rx_activity_n = ~(act_cnt != 0);   // active-low pin
-    assign rx_overflow_n = ~rx_overflow_i;    // active-low pin: LIT = healthy
+
+    // ---- FIFO overrun: latch the 1-cycle pulse so it stays visible ----
+    // Cleared only by reset (power-on or the RESET button), which is what makes
+    // it a useful between-runs check: press reset, replay, then look.
+    logic overflow_sticky;
+    always_ff @(posedge clk100) begin
+        if (!arstn)             overflow_sticky <= 1'b0;
+        else if (rx_overflow_i) overflow_sticky <= 1'b1;
+    end
+    assign rx_overflow_n = ~overflow_sticky;  // active-low: dark = healthy
 
 endmodule

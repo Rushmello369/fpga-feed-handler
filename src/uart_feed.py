@@ -206,10 +206,25 @@ def cmd_run(args):
 
     with open(args.send, "rb") as f:
         payload = f.read()
+
+    # Count the ITCH messages we are about to send, so the FPGA's msg_count can
+    # be sanity-checked against it afterwards. The FPGA's counters accumulate
+    # from reset, so replaying twice without pressing RESET silently doubles
+    # them - and, far worse, leaves the previous run's orders resting in the
+    # book, which makes every feature disagree with the golden model for
+    # reasons that look like an RTL bug.
+    n_sent = 0
+    _i = 0
+    while _i + 2 <= len(payload):
+        _ln = int.from_bytes(payload[_i:_i + 2], "big")
+        _i += 2 + _ln
+        if _i <= len(payload):
+            n_sent += 1
+
     t0 = time.time()
     ser.write(payload)
     ser.flush()
-    print(f"sent {len(payload)} bytes; waiting for frames...")
+    print(f"sent {len(payload)} bytes ({n_sent} messages); waiting for frames...")
 
     # drain: wait until no new frames arrive for `settle` seconds
     settle, last_n, idle_start = args.settle, -1, time.time()
@@ -239,6 +254,50 @@ def cmd_run(args):
         if s['parse_err']:
             print(f"  WARNING: {s['parse_err']} parse errors - upstream framing "
                   f"may be misaligned")
+
+        # The single most common bring-up mistake: replaying without pressing
+        # RESET first. Counters accumulate from reset, so msg_count comes back
+        # as a multiple of what was sent - and the order book still holds the
+        # previous run's liquidity, so the features diverge from golden in a way
+        # that looks exactly like an RTL bug. Catch it here instead.
+        if s['msg'] > n_sent:
+            mult = s['msg'] / n_sent if n_sent else 0
+            print()
+            print(f"  *** STALE STATE: FPGA reports msg={s['msg']} but only "
+                  f"{n_sent} messages were sent ({mult:.1f}x) ***")
+            print( "  The device was not reset before this run. Its counters AND")
+            print( "  its order book still hold the previous replay, so any")
+            print( "  golden-model comparison below is meaningless.")
+            print( "  Press the RESET button (F15) and run this again.")
+            print()
+
+        # ---- latency probe (present once the bitstream carries latency_probe) ----
+        if "lat_count" in s and s["lat_count"]:
+            n = s["lat_count"]
+            mean = s["lat_sum"] / n
+            def ns(c):
+                return "n/a" if c == NO_SAMPLE else f"{c} cyc ({c*10.0:.0f} ns)"
+            print(f"MEASURED LATENCY on silicon  [{n} events]")
+            print(f"  core, event -> feature : min {ns(s['lat_min'])}"
+                  f" | mean {mean:.1f} cyc ({mean*10.0:.0f} ns)"
+                  f" | max {ns(s['lat_max'])}")
+            print(f"  stage breakdown        : resolve={s['lat_resolve']}"
+                  f"  book2tob={s['lat_book2tob']}  tob2feat={s['lat_tob2feat']}")
+            # These two stages are fixed-latency chains with no data dependence,
+            # so anything else is a bug rather than a measurement.
+            if s['lat_book2tob'] != 5 or s['lat_tob2feat'] != 1:
+                print("  *** WARNING: expected book2tob=5, tob2feat=1 -"
+                      " a different value is a BUG, not a result ***")
+            # Interarrival under UART is the transport cost, measured on the same
+            # clock and the same run as the core number above.
+            ia = s['lat_ia_min']
+            if ia != NO_SAMPLE and ia:
+                print(f"  transport (interarrival): min {ia} cyc"
+                      f" ({ia*10.0/1000.0:.1f} us) -> UART is ~{ia/mean:.0f}x"
+                      f" slower than the core")
+            if s['lat_unmatched']:
+                print(f"  events with no feature  : {s['lat_unmatched']}"
+                      f"  (should equal oow + miss = {s['oow'] + s['miss']})")
     else:
         print("FPGA counters: none received "
               "(needs a bitstream with status_reporter)")

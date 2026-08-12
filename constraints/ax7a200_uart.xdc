@@ -29,7 +29,8 @@ set_property -dict {PACKAGE_PIN L15 IOSTANDARD LVCMOS33} [get_ports uart_tx_pin]
 ## warned about. Driving 0 lights the LED, so every one of these nets is
 ## inverted inside top_board and carries an _n suffix.
 ##
-##   M13 -> physical LED2 : FIFO overrun    (LIT = healthy, counter is zero)
+##   M13 -> physical LED2 : FIFO overrun, sticky (DARK = healthy, lit = it
+##                          happened at least once since reset)
 ##   K14 -> physical LED3 : heartbeat, ~1.5 Hz iff clk100 alive + MMCM locked
 ##   K13 -> physical LED4 : ~0.25 s flash per raw UART byte received
 set_property -dict {PACKAGE_PIN M13 IOSTANDARD LVCMOS33} [get_ports rx_overflow_n]
