@@ -30,17 +30,31 @@ module top_board #(
     input  logic rst_btn_n,
     input  logic uart_rx_pin,   // from CP2102 TXD (PC -> FPGA)
     output logic uart_tx_pin,   // to   CP2102 RXD (FPGA -> PC)
-    output logic rx_overflow,   // LED1(M13): FIFO overrun (should stay 0)
 
     // ---- bring-up diagnostics, independent of the ITCH parsing logic ----
-    // heartbeat_led  (LED2/K14): blinks ~3Hz iff clk100 is running AND arstn
-    //   is released, i.e. the MMCM actually locked. Steady on/off = clock/reset
-    //   problem upstream of everything else - stop debugging further down.
-    // rx_activity_led(LED3/K13): stretched ~0.25s per raw UART byte the FPGA's
+    //
+    // THE LEDS ON THIS BOARD ARE ACTIVE-LOW: driving 0 lights the LED. Hence
+    // the _n suffix, and hence the inversions where these are assigned below.
+    // Determined empirically with bringup/led_test.sv, which drives the three
+    // pins at three distinguishable rates - the pin-to-LED mapping is also
+    // shifted by one from what the user guide suggests:
+    //
+    //     pin M13 -> physical LED2      (NOT LED1)
+    //     pin K14 -> physical LED3      (NOT LED2)
+    //     pin K13 -> physical LED4      (NOT LED3)
+    //
+    // rx_overflow_n    (LED2/M13): FIFO overrun. Active-low, so a LIT LED here
+    //   is the healthy state - it means the counter is zero.
+    // heartbeat_n      (LED3/K14): blinks at ~1.5 Hz (0.67 s period) iff clk100
+    //   is running AND arstn is released, i.e. the MMCM actually locked. A
+    //   steady LED is a clock/reset problem upstream of everything else - stop
+    //   debugging further down until this blinks.
+    // rx_activity_n    (LED4/K13): stretched ~0.25 s per raw UART byte the
     //   receiver decodes, BEFORE the FIFO/core - proves bytes are physically
     //   reaching this chip regardless of what the ITCH pipeline does with them.
-    output logic heartbeat_led,
-    output logic rx_activity_led
+    output logic rx_overflow_n,
+    output logic heartbeat_n,
+    output logic rx_activity_n
 );
 
     // ---- 200 MHz differential input -> single-ended ----
@@ -96,6 +110,7 @@ module top_board #(
 
     // ---- pipeline + UART ----
     logic rx_byte_seen;
+    logic rx_overflow_i;      // active-high internally, inverted at the pin
 
     top_uart #(
         .CLK_FREQ_HZ  (100_000_000),
@@ -110,7 +125,7 @@ module top_board #(
         .clk(clk100), .arstn(arstn),
         .uart_rx_pin(uart_rx_pin),
         .uart_tx_pin(uart_tx_pin),
-        .rx_overflow(rx_overflow),
+        .rx_overflow(rx_overflow_i),
         .rx_byte_seen(rx_byte_seen)
     );
 
@@ -120,7 +135,9 @@ module top_board #(
         if (!arstn) hb_cnt <= '0;
         else        hb_cnt <= hb_cnt + 1'b1;
     end
-    assign heartbeat_led = hb_cnt[25];   // ~1.5s period, unmistakably a blink
+    // hb_cnt[25] toggles every 2^25 cycles = 0.335 s at 100 MHz, so the LED
+    // blinks with a 0.67 s period (~1.5 Hz) - unmistakably a blink by eye.
+    assign heartbeat_n = ~hb_cnt[25];    // active-low pin
 
     // ---- rx activity: stretch each raw UART byte into a visible flash ----
     localparam int STRETCH = 100_000_000 / 4;   // ~0.25s at 100MHz
@@ -130,6 +147,7 @@ module top_board #(
         else if (rx_byte_seen)  act_cnt <= STRETCH[$clog2(STRETCH)-1:0] - 1'b1;
         else if (act_cnt != 0)  act_cnt <= act_cnt - 1'b1;
     end
-    assign rx_activity_led = (act_cnt != 0);
+    assign rx_activity_n = ~(act_cnt != 0);   // active-low pin
+    assign rx_overflow_n = ~rx_overflow_i;    // active-low pin: LIT = healthy
 
 endmodule

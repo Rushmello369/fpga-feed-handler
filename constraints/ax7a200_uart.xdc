@@ -23,23 +23,27 @@ set_property -dict {PACKAGE_PIN L14 IOSTANDARD LVCMOS33} [get_ports uart_rx_pin]
 ## FPGA TX  -> CP2102 RXD  (frames to PC)
 set_property -dict {PACKAGE_PIN L15 IOSTANDARD LVCMOS33} [get_ports uart_tx_pin]
 
-## ---- FIFO-overflow indicator on user LED1 ----
-set_property -dict {PACKAGE_PIN M13 IOSTANDARD LVCMOS33} [get_ports rx_overflow]
-
-## ---- bring-up diagnostics: heartbeat (LED2) + rx-byte-seen (LED3) ----
-## heartbeat_led   : blinks ~3Hz iff clk100 alive + MMCM locked (reset released)
-## rx_activity_led : flashes ~0.25s per raw UART byte the FPGA physically receives
-set_property -dict {PACKAGE_PIN K14 IOSTANDARD LVCMOS33} [get_ports heartbeat_led]
-set_property -dict {PACKAGE_PIN K13 IOSTANDARD LVCMOS33} [get_ports rx_activity_led]
+## ---- user LEDs: ACTIVE-LOW, and the pin-to-label mapping is shifted by one ----
+## Both facts were established empirically with bringup/led_test.sv rather than
+## taken from the user guide, which is what the note at the top of this file
+## warned about. Driving 0 lights the LED, so every one of these nets is
+## inverted inside top_board and carries an _n suffix.
+##
+##   M13 -> physical LED2 : FIFO overrun    (LIT = healthy, counter is zero)
+##   K14 -> physical LED3 : heartbeat, ~1.5 Hz iff clk100 alive + MMCM locked
+##   K13 -> physical LED4 : ~0.25 s flash per raw UART byte received
+set_property -dict {PACKAGE_PIN M13 IOSTANDARD LVCMOS33} [get_ports rx_overflow_n]
+set_property -dict {PACKAGE_PIN K14 IOSTANDARD LVCMOS33} [get_ports heartbeat_n]
+set_property -dict {PACKAGE_PIN K13 IOSTANDARD LVCMOS33} [get_ports rx_activity_n]
 
 ## ---- async inputs: don't time them against the core clock ----
 ## (the button is double-registered + debounced inside button_debounce)
 set_false_path -from [get_ports rst_btn_n]
 set_false_path -from [get_ports uart_rx_pin]
 set_false_path -to [get_ports uart_tx_pin]
-set_false_path -to [get_ports rx_overflow]
-set_false_path -to [get_ports heartbeat_led]
-set_false_path -to [get_ports rx_activity_led]
+set_false_path -to [get_ports rx_overflow_n]
+set_false_path -to [get_ports heartbeat_n]
+set_false_path -to [get_ports rx_activity_n]
 
 ## ---- bitstream / config bank (ALINX A7 boards: 3.3 V config) ----
 set_property CFGBVS VCCO [current_design]
