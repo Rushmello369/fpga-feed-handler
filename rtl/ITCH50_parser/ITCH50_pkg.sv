@@ -6,7 +6,6 @@
  *   - lookup tables derived directly from the NASDAQ ITCH 5.0 spec
  *   - shared data shapes (structs / enums) passed between modules
  *   - small pure functions (no state, no timing)
- * No FSMs or per-module business logic belongs here.
 */
 
 package ITCH50_pkg;

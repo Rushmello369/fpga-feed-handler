@@ -1,26 +1,26 @@
 /*
- * top_v2
- * ------
- * Wires the complete v2 ITCH pipeline:
- *
- *   byte stream -> itch_parser -> event_dispatcher -> { order_lookup,
- *   book_update } -> priority_encoder -> tob_tracker -> feature_engine
- *   -> board_link_tx -> byte stream out (to Pynq Z1)
- *
- * The AXI-Lite status register block and latency counters from v1 attach
- * at this level (not included here; wire the diagnostic outputs -
- * parse_error, unknown_count, msg_count, miss_count, oow_count,
- * drop_count - into the existing feed_handler register map).
- *
- * Parameters BASE_PRICE / WINDOW_SIZE / QTY_SHIFT are surfaced here so a
- * single place controls calibration for the whole design.
- */
+top_v2
+------
+Wires the complete v2 ITCH pipeline:
+ 
+byte stream -> itch_parser -> event_dispatcher -> { order_lookup,
+book_update } -> priority_encoder -> tob_tracker -> feature_engine
+-> board_link_tx -> byte stream out (to Pynq Z1)
+ 
+The AXI-Lite status register block and latency counters from v1 attach
+at this level (not included here; wire the diagnostic outputs -
+parse_error, unknown_count, msg_count, miss_count, oow_count,
+drop_count - into the existing feed_handler register map).
+ 
+Parameters BASE_PRICE / WINDOW_SIZE / QTY_SHIFT are surfaced here so a
+single place controls calibration for the whole design.
+*/
 
 module top_v2
     import ITCH50_pkg::*;
 #(
     parameter int unsigned BASE_PRICE    = 1_550_000,
-    parameter int unsigned WINDOW_SIZE   = 2048,
+    parameter int unsigned WINDOW_SIZE   = 1023,
     parameter int unsigned QTY_SHIFT     = 0,
     parameter int          TABLE_BITS    = 14,
     // single-instrument filter (calibrate with BASE_PRICE per symbol/day)

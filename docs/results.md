@@ -172,6 +172,78 @@ reproduce the direct-mapped table's silent-overwrite behaviour rather than
 substitute an unbounded dictionary, and 14,060 agreeing evictions is what
 demonstrates it does.
 
+### Confirmed on silicon
+
+The 50k capture was replayed into the AX7A200B over UART at 1 Mbaud and the
+returned frames diffed against the same golden model. Every counter the FPGA
+reports matches the simulation exactly:
+
+| | RTL simulation | **Silicon** |
+|---|---|---|
+| messages | 50,000 | **50,000** |
+| unknown message types | 2,120 | **2,120** |
+| order-table misses | 746 | **746** |
+| out-of-window drops | 15,401 | **15,401** |
+| dropped frames | 0 | **0** |
+| parse errors | 0 | **0** |
+| frames emitted | 31,994 | **31,994** |
+| **feature mismatches vs golden** | **0** | **0** |
+
+191,964 feature values, produced identically by three independent things: the
+RTL in simulation, a Python model written from the specification, and an FPGA.
+
+Transfer rate: 1,716,664 bytes in 19.28 s = 89 KB/s against a theoretical
+100 KB/s for 1 Mbaud 8-N-1; the shortfall is host-side inter-byte gaps.
+
+### An operational trap worth documenting
+
+The first attempt at this comparison failed with 87,647 field mismatches and a
+first frame showing `spr = -195` — a crossed book, which cannot happen from an
+empty book. It looked exactly like an order-book bug.
+
+It was not. The FPGA had not been reset between replays. Four independent
+counters came back at *precisely* 2× their expected values (`msg` 100,000,
+`unknown` 4,240, `miss` 1,492, `oow` 30,802), which no logic error could produce
+as a coincidence — the counters accumulate from reset, and more importantly the
+order book still held the previous run's resting liquidity while the golden
+model always starts empty.
+
+Two lessons:
+
+- **Simulation always starts from reset; real devices do not.** This class of
+  failure is invisible to every testbench and appears only on hardware. It is a
+  lifecycle bug, not a logic bug.
+- **The diagnostic counters were what solved it.** Without them the natural move
+  is to start debugging `book_update`. With them, the exact 2× pattern named the
+  cause immediately. On a device with no processor and no debugger, the counters
+  *are* the debugger.
+
+`uart_feed.py` now counts the messages in the file it sends and compares that
+against the FPGA's `msg` counter, reporting stale state explicitly rather than
+printing thousands of diffs.
+
+### Two small residuals, both explained by Replace
+
+On the clean run, two probe cross-checks come out slightly under rather than
+exactly equal:
+
+| | Value | Expected | Δ |
+|---|---|---|---|
+| latency samples | 31,756 | 31,994 frames | −238 |
+| events with no feature | 16,120 | `oow + miss` = 16,147 | −27 |
+
+Both follow from Replace being decomposed into two book updates for one event:
+
+- The probe times an event to its **first** feature, so the second feature a
+  Replace produces is not a separate measurement — hence fewer samples than
+  frames.
+- A Replace whose one half is out-of-window while the other half succeeds
+  increments `oow` but still reaches the book, so it is not an "event that
+  produced no feature".
+
+Both gaps are small relative to the 551 Replace messages in this capture, and
+both shrink to zero on data without Replace.
+
 ### A diagnostic bug this exercise found
 
 At 200k messages the run reported `drop_count = 2160` while emitting exactly
@@ -238,51 +310,61 @@ This deliberately **excludes** UART wire time and the parser's byte-shifting,
 making it a property of the core pipeline rather than of whatever transport
 happens to be feeding it. See [§5.3](#53-why-end-to-end-would-be-the-wrong-number).
 
-### 5.2 Stage breakdown — **analytical**, pending hardware measurement
+### 5.2 Measured on silicon
 
-Derived by tracing the FSMs, **not yet measured on hardware**:
+`latency_probe.sv` timestamps every event through the pipeline and the results
+are read back over the status channel. Measured on the AX7A200B over 31,756
+events of real ITCH data:
 
-| Interval | Cycles | Determined by |
+| | Cycles | Time @100 MHz |
 |---|---|---|
-| `t_resolve` (Add) | ~7 | dispatcher `ADD_ISSUE`/`ADD_WAIT` + `book_update` (5) |
-| `t_resolve` (Execute/Cancel/Delete) | ~12 | + `order_lookup` (3) round trip before the book can act |
-| `t_book2tob` | **5** (constant) | encoder pipe (2) + address settle (1) + registered read (1) + output register (1) |
-| `t_tob2feat` | **1** (constant) | `feature_engine`, all six features in parallel |
-| **`t_total`** (Execute) | **~18 cycles ≈ 180 ns** @ 100 MHz | |
+| min | 13 | **130 ns** |
+| mean | 15.3 | **153 ns** |
+| max | 18 | **180 ns** |
 
-If the parser were fed at one byte per cycle instead of being UART-starved, a
-33-byte Execute would add 33 cycles of shift-in, giving ~51 cycles ≈ **510 ns**
-message-to-feature.
+| Stage | Cycles | Determined by |
+|---|---|---|
+| `t_resolve` | 7 | dispatcher FSM + `order_lookup` + `book_update` |
+| `t_book2tob` | **5** | encoder pipe (2) + address settle (1) + registered read (1) + output register (1) |
+| `t_tob2feat` | **1** | `feature_engine`, all six features in parallel |
 
-**Status:** `latency_probe` (`rtl/ITCH50_parser/latency_probe.sv`) implements
-this measurement and is unit-verified (35 assertions), but is **not yet wired
-into `top_v2`**, so no hardware-measured numbers exist yet. This section will be
-replaced with measured min/max/mean once the probe is integrated and read back
-over the status channel. Until then, treat the table above as arithmetic, not
-evidence.
+**The two fixed stages were predicted before measurement.** `t_book2tob` and
+`t_tob2feat` are fixed-latency chains with no data dependence, so their values
+were derived from the RTL first — 5 and 1 — and any other result would have been
+a bug rather than a measurement. They came back as 5 and 1 in simulation, and
+again as 5 and 1 on hardware. The probe therefore doubles as an online
+correctness check, not merely an instrument.
 
-Note that `t_book2tob` and `t_tob2feat` are fixed-latency chains with no data
-dependence. Once measured, any value other than 5 and 1 indicates a bug, so the
-probe doubles as an online correctness check.
+Simulation and silicon agree on the extremes exactly (13 and 18 cycles), which
+is expected — the pipeline is fully synchronous with no data-dependent stalls
+outside `t_resolve`.
+
+An earlier analytical estimate of "~18 cycles for an Execute" turned out to be
+the correct *upper* bound; the mean is lower because Add messages resolve
+without the `order_lookup` round trip.
 
 ### 5.3 Why end-to-end would be the wrong number
 
 The bring-up transport is a 1 Mbaud UART. At 8-N-1 that is 10 bits per byte,
 so **10 µs per byte**, 100 KB/s.
 
-| | Time |
-|---|---|
-| Computing all six features | 1 cycle = **10 ns** |
-| Transmitting one 15-byte feature frame | **150 µs** |
-| A 33-byte Execute arriving over the wire | **330 µs** |
-| Core processing of that Execute (analytical) | **~0.18 µs** |
+Both sides of this comparison are now **measured on the same chip, in the same
+run, on the same clock** — the probe records the interval between consecutive
+events, which under UART is the transport cost:
 
-The transport is roughly **three orders of magnitude** slower than the core. Any
-end-to-end figure measured on this bitstream would therefore be a measurement of
-the UART, not of the feed handler. This is why the probe brackets the core only,
-and why it also records the interval between consecutive events — so the
-transport cost and the core cost can be reported from the same run, on the same
-clock, both measured rather than one measured and one asserted.
+| | Measured |
+|---|---|
+| core, event → feature | **153 ns** |
+| transport, minimum interarrival | **20,791 cycles = 207.9 µs** |
+| **ratio** | **~1,363×** |
+
+For reference, the arithmetic that predicted this: 1 Mbaud 8-N-1 is 10 bits per
+byte, so 10 µs per byte and 100 KB/s; a 33-byte Execute takes 330 µs on the
+wire while the core needs 0.15 µs to process it.
+
+Any end-to-end figure from this bitstream would therefore be a measurement of
+the UART, not of the feed handler — which is exactly why the probe brackets the
+core only, and why the transport is reported separately rather than folded in.
 
 UART was chosen for bring-up because it minimises time-to-first-observation and
 debugging surface: two wires, an existing USB bridge, no MAC, no PHY
