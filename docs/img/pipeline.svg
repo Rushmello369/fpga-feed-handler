@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 520" width="1020" height="520"
+     font-family="ui-sans-serif,-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a6fa5"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a8f98"/>
+    </marker>
+  </defs>
+
+  <rect width="1020" height="520" rx="10" fill="#f6f8fa"/>
+
+  <text x="510" y="34" text-anchor="middle" font-size="18" font-weight="700" fill="#24292f">
+    ITCH 5.0 feed handler — one event in flight, zero DSPs
+  </text>
+
+  <!-- ================= datapath ================= -->
+  <text x="42" y="70" font-size="12.5" font-weight="700" fill="#1f7a4d">DATAPATH</text>
+
+  <!-- row 1 -->
+  <g font-size="12.5" fill="#24292f" text-anchor="middle">
+    <rect x="42" y="82" width="118" height="52" rx="6" fill="#eceff2" stroke="#8a8f98"/>
+    <text x="101" y="104">ITCH bytes</text><text x="101" y="121" font-size="11" fill="#5b6472">UART today</text>
+
+    <rect x="196" y="82" width="132" height="52" rx="6" fill="#e6f4ec" stroke="#1f7a4d"/>
+    <text x="262" y="104" font-weight="600">itch_parser</text><text x="262" y="121" font-size="11" fill="#5b6472">byte-serial FSM</text>
+
+    <rect x="364" y="82" width="150" height="52" rx="6" fill="#e6f4ec" stroke="#1f7a4d"/>
+    <text x="439" y="104" font-weight="600">event_dispatcher</text><text x="439" y="121" font-size="11" fill="#5b6472">protocol logic</text>
+
+    <rect x="562" y="60" width="140" height="46" rx="6" fill="#eaf1f8" stroke="#4a6fa5"/>
+    <text x="632" y="79" font-weight="600">order_lookup</text><text x="632" y="95" font-size="11" fill="#5b6472">id → price/side</text>
+
+    <rect x="562" y="118" width="140" height="46" rx="6" fill="#eaf1f8" stroke="#4a6fa5"/>
+    <text x="632" y="137" font-weight="600">book_update</text><text x="632" y="153" font-size="11" fill="#5b6472">BRAM price levels</text>
+  </g>
+
+  <g stroke="#4a6fa5" stroke-width="1.6" marker-end="url(#a)" fill="none">
+    <line x1="160" y1="108" x2="192" y2="108"/>
+    <line x1="328" y1="108" x2="360" y2="108"/>
+    <path d="M514,100 L538,100 L538,83 L558,83"/>
+    <path d="M514,116 L538,116 L538,141 L558,141"/>
+  </g>
+  <path d="M702,83 L724,83 L724,141 L706,141" stroke="#8a8f98" stroke-width="1.3" fill="none" marker-end="url(#ag)"/>
+  <text x="762" y="80" font-size="10.5" fill="#5b6472">resolved</text>
+  <text x="762" y="93" font-size="10.5" fill="#5b6472">price/side</text>
+
+  <!-- row 2 -->
+  <g font-size="12.5" fill="#24292f" text-anchor="middle">
+    <rect x="196" y="212" width="150" height="52" rx="6" fill="#e6f4ec" stroke="#1f7a4d"/>
+    <text x="271" y="234" font-weight="600">priority_encoder</text><text x="271" y="251" font-size="11" fill="#5b6472">radix-32, 2 cyc</text>
+
+    <rect x="392" y="212" width="140" height="52" rx="6" fill="#e6f4ec" stroke="#1f7a4d"/>
+    <text x="462" y="234" font-weight="600">tob_tracker</text><text x="462" y="251" font-size="11" fill="#5b6472">top-of-book</text>
+
+    <rect x="578" y="212" width="150" height="52" rx="6" fill="#e6f4ec" stroke="#1f7a4d"/>
+    <text x="653" y="234" font-weight="600">feature_engine</text><text x="653" y="251" font-size="11" fill="#5b6472">6 × int16, 1 cyc</text>
+
+    <rect x="774" y="212" width="140" height="52" rx="6" fill="#e6f4ec" stroke="#1f7a4d"/>
+    <text x="844" y="234" font-weight="600">board_link_tx</text><text x="844" y="251" font-size="11" fill="#5b6472">15-byte frame</text>
+  </g>
+
+  <path d="M580,164 L580,192 L271,192 L271,208" stroke="#4a6fa5" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+  <text x="400" y="187" text-anchor="middle" font-size="10.5" fill="#5b6472">bid / ask occupancy masks</text>
+
+  <g stroke="#4a6fa5" stroke-width="1.6" marker-end="url(#a)" fill="none">
+    <line x1="346" y1="238" x2="388" y2="238"/>
+    <line x1="532" y1="238" x2="574" y2="238"/>
+    <line x1="728" y1="238" x2="770" y2="238"/>
+    <line x1="914" y1="238" x2="960" y2="238"/>
+  </g>
+  <text x="978" y="234" text-anchor="middle" font-size="11" fill="#24292f">to</text>
+  <text x="978" y="248" text-anchor="middle" font-size="11" fill="#24292f">host</text>
+
+  <!-- trade tap: dispatcher straight to the feature engine, bypassing the book -->
+  <path d="M439,134 L439,176 L700,176 L700,208"
+        stroke="#b5651d" stroke-width="1.5" fill="none" marker-end="url(#a)" stroke-dasharray="5 3"/>
+  <text x="742" y="172" font-size="11" fill="#b5651d" font-weight="600">trade tap (TFLOW)</text>
+
+  <!-- book read ports -->
+  <path d="M470,212 L470,202 L648,202 L648,168" stroke="#8a8f98" stroke-width="1.2" fill="none" marker-end="url(#ag)"/>
+  <text x="612" y="215" font-size="10" fill="#5b6472">qty reads</text>
+
+  <!-- ================= diagnostic plane ================= -->
+  <line x1="42" y1="300" x2="978" y2="300" stroke="#d0d7de" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="42" y="326" font-size="12.5" font-weight="700" fill="#4a6fa5">DIAGNOSTIC PLANE — not in the latency path</text>
+
+  <g font-size="12" fill="#24292f" text-anchor="middle">
+    <rect x="42" y="340" width="300" height="60" rx="6" fill="#eaf1f8" stroke="#4a6fa5"/>
+    <text x="192" y="362" font-weight="600">7 pipeline counters</text>
+    <text x="192" y="380" font-size="10.5" fill="#5b6472">msg · unknown · filtered · miss</text>
+    <text x="192" y="394" font-size="10.5" fill="#5b6472">oow · drop · parse_err</text>
+
+    <rect x="386" y="340" width="180" height="60" rx="6" fill="#eaf1f8" stroke="#4a6fa5"/>
+    <text x="476" y="366" font-weight="600">status_reporter</text>
+    <text x="476" y="384" font-size="10.5" fill="#5b6472">31-byte frame on RX idle</text>
+
+    <rect x="610" y="340" width="160" height="60" rx="6" fill="#eaf1f8" stroke="#4a6fa5"/>
+    <text x="690" y="366" font-weight="600">axis_arb2</text>
+    <text x="690" y="384" font-size="10.5" fill="#5b6472">frame-atomic mux</text>
+
+    <rect x="814" y="340" width="164" height="60" rx="6" fill="#eceff2" stroke="#8a8f98"/>
+    <text x="896" y="366" font-weight="600">single UART TX</text>
+    <text x="896" y="384" font-size="10.5" fill="#5b6472">features + status</text>
+  </g>
+
+  <g stroke="#4a6fa5" stroke-width="1.4" marker-end="url(#a)" fill="none">
+    <line x1="342" y1="370" x2="382" y2="370"/>
+    <line x1="566" y1="370" x2="606" y2="370"/>
+    <line x1="770" y1="370" x2="810" y2="370"/>
+  </g>
+  <path d="M844,264 L844,300 L700,300 L700,336" stroke="#4a6fa5" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+
+  <!-- footnotes -->
+  <text x="510" y="440" text-anchor="middle" font-size="12.5" fill="#24292f">
+    <tspan font-weight="700">ev_ready is high only in IDLE</tspan>
+    <tspan fill="#5b6472"> — exactly one event traverses the pipeline at a time</tspan>
+  </text>
+  <text x="510" y="464" text-anchor="middle" font-size="12" fill="#5b6472">
+    Back-pressure propagates upstream to the input FIFO; the output deliberately drops-oldest instead of queueing
+  </text>
+  <text x="510" y="492" text-anchor="middle" font-size="12" fill="#5b6472">
+    Prices stay as window tick indices end to end — which is what lets the feature engine avoid every multiplier and divider
+  </text>
+</svg>

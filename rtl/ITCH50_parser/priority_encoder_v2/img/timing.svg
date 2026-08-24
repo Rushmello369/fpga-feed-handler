@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 420" width="940" height="420"
+     font-family="ui-sans-serif,-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="tl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b5651d"/>
+    </marker>
+    <marker id="tr" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M10,0 L0,5 L10,10 z" fill="#b5651d"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="420" rx="10" fill="#f6f8fa"/>
+
+  <text x="470" y="34" text-anchor="middle" font-size="18" font-weight="700" fill="#24292f">
+    Fixed 2-cycle latency, one result every cycle
+  </text>
+
+  <!-- cycle guides + numbers -->
+  <g stroke="#d0d7de" stroke-width="1" stroke-dasharray="3 3">
+    <line x1="145" y1="60" x2="145" y2="330"/>
+    <line x1="275" y1="60" x2="275" y2="330"/>
+    <line x1="405" y1="60" x2="405" y2="330"/>
+    <line x1="535" y1="60" x2="535" y2="330"/>
+    <line x1="665" y1="60" x2="665" y2="330"/>
+    <line x1="795" y1="60" x2="795" y2="330"/>
+  </g>
+  <g font-size="12" fill="#5b6472" text-anchor="middle">
+    <text x="210" y="72">cycle 0</text>
+    <text x="340" y="72">cycle 1</text>
+    <text x="470" y="72">cycle 2</text>
+    <text x="600" y="72">cycle 3</text>
+    <text x="730" y="72">cycle 4</text>
+  </g>
+
+  <!-- signal labels -->
+  <g font-size="13.5" fill="#24292f" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">
+    <text x="128" y="103">clk</text>
+    <text x="128" y="155">vec</text>
+    <text x="128" y="207">leaf_addr_q</text>
+    <text x="128" y="259">addr</text>
+    <text x="128" y="307">valid</text>
+  </g>
+
+  <!-- clk -->
+  <path d="M100,108 H145 V80 H210 V108 H275 V80 H340 V108 H405 V80 H470 V108 H535 V80 H600 V108 H665 V80 H730 V108 H795 V80 H840"
+        fill="none" stroke="#24292f" stroke-width="1.8"/>
+
+  <!-- vec : A B C D -->
+  <g font-size="13" text-anchor="middle" fill="#24292f">
+    <polygon points="145,155 151,139 269,139 275,155 269,171 151,171" fill="#eaf1f8" stroke="#4a6fa5" stroke-width="1.4"/>
+    <text x="210" y="160">A</text>
+    <polygon points="275,155 281,139 399,139 405,155 399,171 281,171" fill="#eaf1f8" stroke="#4a6fa5" stroke-width="1.4"/>
+    <text x="340" y="160">B</text>
+    <polygon points="405,155 411,139 529,139 535,155 529,171 411,171" fill="#eaf1f8" stroke="#4a6fa5" stroke-width="1.4"/>
+    <text x="470" y="160">C</text>
+    <polygon points="535,155 541,139 659,139 665,155 659,171 541,171" fill="#eaf1f8" stroke="#4a6fa5" stroke-width="1.4"/>
+    <text x="600" y="160">D</text>
+    <polygon points="665,155 671,139 789,139 795,155 789,171 671,171" fill="#eceff2" stroke="#9aa4b0" stroke-width="1.2"/>
+  </g>
+
+  <!-- leaf_addr_q : registered leaf results, 1 cycle behind -->
+  <g font-size="13" text-anchor="middle" fill="#24292f">
+    <polygon points="145,207 151,191 269,191 275,207 269,223 151,223" fill="#eceff2" stroke="#9aa4b0" stroke-width="1.2"/>
+    <polygon points="275,207 281,191 399,191 405,207 399,223 281,223" fill="#e6f4ec" stroke="#1f7a4d" stroke-width="1.4"/>
+    <text x="340" y="212">A</text>
+    <polygon points="405,207 411,191 529,191 535,207 529,223 411,223" fill="#e6f4ec" stroke="#1f7a4d" stroke-width="1.4"/>
+    <text x="470" y="212">B</text>
+    <polygon points="535,207 541,191 659,191 665,207 659,223 541,223" fill="#e6f4ec" stroke="#1f7a4d" stroke-width="1.4"/>
+    <text x="600" y="212">C</text>
+    <polygon points="665,207 671,191 789,191 795,207 789,223 671,223" fill="#e6f4ec" stroke="#1f7a4d" stroke-width="1.4"/>
+    <text x="730" y="212">D</text>
+  </g>
+
+  <!-- addr : final result, 2 cycles behind -->
+  <g font-size="13" text-anchor="middle" fill="#24292f">
+    <polygon points="145,259 151,243 399,243 405,259 399,275 151,275" fill="#eceff2" stroke="#9aa4b0" stroke-width="1.2"/>
+    <polygon points="405,259 411,243 529,243 535,259 529,275 411,275" fill="#fdf3e3" stroke="#b5651d" stroke-width="1.6"/>
+    <text x="470" y="264" font-weight="700">A</text>
+    <polygon points="535,259 541,243 659,243 665,259 659,275 541,275" fill="#fdf3e3" stroke="#b5651d" stroke-width="1.6"/>
+    <text x="600" y="264" font-weight="700">B</text>
+    <polygon points="665,259 671,243 789,243 795,259 789,275 671,275" fill="#fdf3e3" stroke="#b5651d" stroke-width="1.6"/>
+    <text x="730" y="264" font-weight="700">C</text>
+  </g>
+
+  <!-- valid -->
+  <path d="M145,314 H405 V292 H795" fill="none" stroke="#1f7a4d" stroke-width="1.8"/>
+
+  <!-- latency annotation -->
+  <line x1="145" y1="348" x2="405" y2="348" stroke="#b5651d" stroke-width="1.6"
+        marker-start="url(#tr)" marker-end="url(#tl)"/>
+  <line x1="145" y1="338" x2="145" y2="358" stroke="#b5651d" stroke-width="1.2"/>
+  <line x1="405" y1="338" x2="405" y2="358" stroke="#b5651d" stroke-width="1.2"/>
+  <text x="275" y="340" text-anchor="middle" font-size="13" font-weight="700" fill="#b5651d">
+    2 cycles: A in → A out
+  </text>
+
+  <text x="470" y="380" text-anchor="middle" font-size="12.5" fill="#5b6472">
+    B, C, D follow one per cycle — fully pipelined, no stall, no back-pressure
+  </text>
+
+  <text x="470" y="402" text-anchor="middle" font-size="12" fill="#5b6472">
+    leaves are combinational; the two register stages are what break the O(N) path
+  </text>
+</svg>
