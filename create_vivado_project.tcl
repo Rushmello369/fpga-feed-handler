@@ -5,7 +5,7 @@
 ## with sources correctly split into design / simulation / constraints filesets.
 ##
 ## Run from the Vivado Tcl Console:
-##     cd C:/LatencyGate_ML/hardware/ax7a200b
+##     cd <repo>
 ##     source create_vivado_project.tcl
 ## or in batch:
 ##     vivado -mode batch -source create_vivado_project.tcl
@@ -14,7 +14,9 @@
 ## =============================================================================
 
 ## ---- user settings ----------------------------------------------------------
-set root      "C:/LatencyGate_ML/hardware/ax7a200b"
+## Repo root is derived from this script's own location, so the project
+## builds wherever the repository is checked out.
+set root      [file normalize [file dirname [info script]]]
 set proj_name "itch_uart"
 set proj_dir  "$root/vivado"
 ## AX7A200B = XC7A200T, FBG484, speed -2. CONFIRM the exact suffix from the chip

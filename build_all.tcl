@@ -5,11 +5,11 @@
 ## bitstream, and print the numbers that matter. One command, no GUI clicking.
 ##
 ## Run from the Vivado Tcl Console:
-##     cd C:/LatencyGate_ML/hardware/ax7a200b
+##     cd <repo>
 ##     source build_all.tcl
 ##
 ## or headless (note: PowerShell 5.1 has no '&&', use two statements):
-##     Set-Location C:\LatencyGate_ML\hardware\ax7a200b
+##     Set-Location <repo>
 ##     vivado -mode batch -source build_all.tcl
 ##
 ## WARNING: create_vivado_project.tcl uses -force, so this DELETES the previous
@@ -18,7 +18,7 @@
 ## to keep an old .bit for comparison, copy it out first.
 ## =============================================================================
 
-set root  "C:/LatencyGate_ML/hardware/ax7a200b"
+set root  [file normalize [file dirname [info script]]]
 set jobs  8
 
 cd $root

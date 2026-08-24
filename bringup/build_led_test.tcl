@@ -2,7 +2,7 @@
 ## build_led_test.tcl  --  build the LED bring-up bitstream in one shot.
 ##
 ## Run from the Vivado Tcl Console:
-##     cd C:/LatencyGate_ML/hardware/ax7a200b/bringup
+##     cd <repo>/bringup
 ##     source build_led_test.tcl
 ##
 ## Builds into its own project directory, so it does NOT touch the main
@@ -10,7 +10,7 @@
 ## three counters.
 ## =============================================================================
 
-set here "C:/LatencyGate_ML/hardware/ax7a200b/bringup"
+set here [file normalize [file dirname [info script]]]
 set part "xc7a200tfbg484-2"
 
 create_project -force led_test $here/vivado_led -part $part

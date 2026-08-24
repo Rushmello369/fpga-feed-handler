@@ -28,14 +28,25 @@ failed_list=""
 
 run() {
     local name=$1; shift
-    local out pass fail
-    out=$(bash tb/run_tb.sh "$name" "$@" 2>&1)
-    pass=$(echo "$out" | grep -oE "PASSED: +[0-9]+" | tail -1 | grep -oE "[0-9]+")
-    fail=$(echo "$out" | grep -oE "FAILED: +[0-9]+" | tail -1 | grep -oE "[0-9]+")
+    local out pass fail attempt
+
+    # xsim on Windows intermittently fails to compile because the previous
+    # simulation still holds a lock on xsim.dir/work as it exits. It shows up
+    # as a missing PASSED/FAILED summary, hits a different testbench each run,
+    # and always succeeds when that testbench is run on its own - so it is a
+    # tool race, not a design regression. One retry after a short pause is
+    # enough; a suite that fails at random is a suite nobody trusts.
+    for attempt in 1 2; do
+        out=$(bash tb/run_tb.sh "$name" "$@" 2>&1)
+        pass=$(echo "$out" | grep -oE "PASSED: +[0-9]+" | tail -1 | grep -oE "[0-9]+")
+        fail=$(echo "$out" | grep -oE "FAILED: +[0-9]+" | tail -1 | grep -oE "[0-9]+")
+        [ -n "$pass" ] && break
+        [ "$attempt" = "1" ] && sleep 3
+    done
 
     n_tb=$((n_tb + 1))
     if [ -z "$pass" ]; then
-        printf "  %-32s  \033[31mNO SUMMARY (compile/elab error)\033[0m\n" "$name"
+        printf "  %-32s  \033[31mNO SUMMARY (compile/elab error, 2 attempts)\033[0m\n" "$name"
         failed_list="$failed_list $name"
         total_fail=$((total_fail + 1))
         return
