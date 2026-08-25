@@ -19,6 +19,67 @@
  * emitted (a length mismatch means upstream framing is misaligned and the
  * field offsets cannot be trusted). Unknown types are skipped silently
  * and counted in unknown_count.
+ *
+ * ===========================================================================
+ * RESOURCES     out-of-context synthesis, xc7a200tfbg484-2, FILTER_EN=1
+ * ===========================================================================
+ *   LUT 298    FF 360    CARRY4 37    BRAM 0    DSP 0
+ *
+ *   The register count is almost entirely itch_event_t itself - 217 bits, two
+ *   of them 64-bit order ids - plus the four 32-bit diagnostic counters. That
+ *   is the price of one event shape covering every message type: new_order_id
+ *   is dead weight for everything except Replace. Of the LUTs, 195 are LUT2,
+ *   mostly the "idx >= a && idx <= b" field-window comparators.
+ *
+ * ===========================================================================
+ * TIMING
+ * ===========================================================================
+ *   WNS +4.953 ns against a 10 ns constraint   ->   Fmax ~198 MHz
+ *
+ *   Nearly 5 ns of slack makes this one of the least timing-critical modules
+ *   in the design: it only shifts bytes and compares index ranges, with no
+ *   arithmetic carry chain. The critical path lives elsewhere - book_update's
+ *   price-to-address divide - which closes 100 MHz at +0.789 ns, i.e. around
+ *   109 MHz for the design as a whole.
+ *
+ * ===========================================================================
+ * LATENCY       deterministic, set entirely by message length
+ * ===========================================================================
+ *   One byte per cycle while s_tvalid holds, so the cost is the 2 framing
+ *   bytes plus the body. There is no jitter; the only variable is time spent
+ *   in EMIT waiting for ev_ready when the dispatcher is busy.
+ *
+ *     D  Delete           19 B  ->  21 cycles    210 ns @ 100 MHz
+ *     X  Cancel           23 B  ->  25 cycles    250 ns
+ *     E  Execute          31 B  ->  33 cycles    330 ns
+ *     U  Replace          35 B  ->  37 cycles    370 ns
+ *     A  Add              36 B  ->  38 cycles    380 ns
+ *     C  Exec w/ Price    36 B  ->  38 cycles    380 ns
+ *     F  Add + MPID       40 B  ->  42 cycles    420 ns
+ *
+ * ===========================================================================
+ * THROUGHPUT    this module is the core's bottleneck
+ * ===========================================================================
+ *   1 byte/cycle at 100 MHz = 100 MB/s = 800 Mbps ingest ceiling.
+ *
+ *   Parsing one Execute costs 33 cycles against roughly 18 for the entire
+ *   rest of the pipeline (dispatcher + order_lookup + book_update ~12,
+ *   tob_tracker 5, feature_engine 1). Byte-serial decode is therefore slower
+ *   than everything downstream put together, which is why core latency in
+ *   this project is measured from ev_handoff rather than from the first byte:
+ *   folding in the shift-in would report the transport, not the design.
+ *
+ *     UART @ 1 Mbaud       0.1 MB/s    1000x headroom
+ *     100 Mbps Ethernet   12.5 MB/s       8x headroom
+ *     1 Gbps Ethernet      125 MB/s    DOES NOT FIT - 25% over the ceiling
+ *
+ *   So byte-serial is the right trade for the transport actually in use, and
+ *   the first thing that breaks at gigabit line rate. Two ways out, both with
+ *   real cost: clock faster (this module reaches 198 MHz, but the design is
+ *   capped near 109 MHz by book_update), or widen the datapath - a 64-bit MAC
+ *   interface delivers 8 bytes per cycle and needs a fundamentally different
+ *   parser, one resolving several field boundaries per cycle and handling
+ *   messages that span beats.
  */
 
 module itch_parser
