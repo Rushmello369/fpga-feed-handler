@@ -72,3 +72,10 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# ---- third-party reference material ----
+# doc/ holds published vendor factsheets and academic papers kept locally for
+# reference. They are other people's copyrighted work, not this project's
+# source, so they are not redistributed here. docs/ (this project's own
+# documentation) is deliberately NOT covered by this rule.
+doc/
