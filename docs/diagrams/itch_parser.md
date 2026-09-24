@@ -15,24 +15,12 @@ the core.
 ```mermaid
 stateDiagram-v2
     [*] --> RD_LEN_HI
-
-    RD_LEN_HI --> RD_LEN_LO : s_tvalid<br/>msg_len[15:8] ← byte
-    RD_LEN_LO --> RD_BODY : s_tvalid<br/>msg_len[7:0] ← byte<br/>idx ← 0, ev ← 0
-    RD_BODY --> RD_BODY : s_tvalid and idx < msg_len-1<br/>extract field, idx++
-    RD_BODY --> EMIT : last byte, known type,<br/>length matches, book-affecting,<br/>locate matches
-    RD_BODY --> RD_LEN_HI : last byte and any of —<br/>unknown type, length mismatch,<br/>wrong symbol, admin type
-    EMIT --> RD_LEN_HI : ev_ready
-
-    note right of RD_BODY
-        s_tready is HIGH here
-        one byte per cycle
-    end note
-
-    note right of EMIT
-        s_tready is LOW
-        event held until the
-        dispatcher accepts it
-    end note
+    RD_LEN_HI --> RD_LEN_LO: length high byte
+    RD_LEN_LO --> RD_BODY: length low byte
+    RD_BODY --> RD_BODY: extract field, idx++
+    RD_BODY --> EMIT: event accepted
+    RD_BODY --> RD_LEN_HI: dropped
+    EMIT --> RD_LEN_HI: ev_ready
 ```
 
 ## 2. End-of-message decision
@@ -41,31 +29,16 @@ The four outcomes at `idx == msg_len - 1`, in the order the RTL tests them.
 
 ```mermaid
 flowchart TD
-    EOM["idx == msg_len - 1<br/>msg_count++"]
-    Q1{"msg_length(mtype) == 0<br/>and idx != 0 ?"}
-    Q2{"msg_length(mtype)<br/>!= msg_len ?"}
-    Q3{"is_book_affecting(mtype) ?"}
-    Q4{"FILTER_EN == 0<br/>or locate matches ?"}
-
-    EOM --> Q1
-    Q1 -->|yes| UNK["unknown_count++<br/><i>not fatal</i>"]
-    Q1 -->|no| Q2
-    Q2 -->|yes| ERR["<b>parse_error pulse</b><br/>event NOT emitted"]
-    Q2 -->|no| Q3
-    Q3 -->|no| ADM["admin type — S, R<br/>no event"]
-    Q3 -->|yes| Q4
-    Q4 -->|no| FIL["filtered_count++<br/>wrong instrument"]
-    Q4 -->|yes| OK["<b>ev_valid ← 1</b><br/>→ EMIT"]
-
-    UNK --> BACK(["RD_LEN_HI"])
-    ERR --> BACK
-    ADM --> BACK
-    FIL --> BACK
-
-    classDef good fill:#ecfdf5,stroke:#059669
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    class OK good
-    class ERR bad
+    EOM[last body byte<br/>msg_count++]
+    EOM --> Q1{known type?}
+    Q1 -->|no| UNK([unknown_count++])
+    Q1 -->|yes| Q2{length matches spec?}
+    Q2 -->|no| ERR([parse_error, suppressed])
+    Q2 -->|yes| Q3{book-affecting?}
+    Q3 -->|no| ADM([admin type, no event])
+    Q3 -->|yes| Q4{locate matches?}
+    Q4 -->|no| FIL([filtered_count++])
+    Q4 -->|yes| OK([ev_valid, go to EMIT])
 ```
 
 **Why a length mismatch suppresses the event.** If the framing prefix disagrees
@@ -80,43 +53,11 @@ complete and correctly ordered after the last byte. No buffering, no reversal.
 
 ```mermaid
 flowchart LR
-    subgraph COMMON["every message type"]
-        B0["byte 0<br/>msg_type"]
-        B12["bytes 1-2<br/><b>stock_locate</b>"]
-    end
-
-    subgraph AF["A / F — Add"]
-        AF1["11-18 order_id"]
-        AF2["19 side"]
-        AF3["20-23 shares"]
-        AF4["32-35 price"]
-    end
-
-    subgraph ECX["E / C / X"]
-        E1["11-18 order_id"]
-        E2["19-22 shares"]
-        E3["32-35 price<br/><i>C only, informational</i>"]
-    end
-
-    subgraph D["D — Delete"]
-        D1["11-18 order_id<br/><i>nothing else on the wire</i>"]
-    end
-
-    subgraph U["U — Replace"]
-        U1["11-18 <b>old</b> order_id"]
-        U2["19-26 <b>new</b> order_id"]
-        U3["27-30 new shares"]
-        U4["31-34 new price"]
-        U5["<b>side absent</b><br/>recovered via order_lookup"]
-    end
-
-    COMMON --> AF
-    COMMON --> ECX
-    COMMON --> D
-    COMMON --> U
-
-    classDef warn fill:#fef2f2,stroke:#dc2626
-    class U5 warn
+    COMMON[bytes 0-2<br/>type + stock_locate]
+    COMMON --> AF[A / F<br/>id 11-18, side 19<br/>shares 20-23, price 32-35]
+    COMMON --> ECX[E / C / X<br/>id 11-18, shares 19-22<br/>price 32-35 on C]
+    COMMON --> D[D<br/>id 11-18 only]
+    COMMON --> U[U<br/>old id 11-18, new id 19-26<br/>shares 27-30, price 31-34<br/>side absent]
 ```
 
 `stock_locate` sits at the **same offset in every message type**. That is what

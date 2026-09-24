@@ -15,35 +15,19 @@ the trade stream are **unsynchronised**, and they drive different features.
 
 ```mermaid
 flowchart LR
-    subgraph A["Stream A — snapshots"]
-        direction TB
-        TOB["tob_valid + tob_t<br/>from tob_tracker<br/><i>one per book update</i>"]
-    end
-
-    subgraph B["Stream B — trades"]
-        direction TB
-        TR["trade_valid + side + qty<br/><b>direct from the dispatcher</b><br/><i>E / C hits only</i>"]
-    end
-
-    A --> F1["SPR"]
-    A --> F2["TOBI"]
-    A --> F3["OFI"]
-    A --> F4["EMADEV"]
-    A --> F5["MOM"]
-    B --> ACC["tflow_acc<br/>rolling 16-trade ring"]
-    ACC -->|"sampled by stream A"| F6["TFLOW"]
-
-    F1 --> OUT(["feat_valid<br/>6 × signed int16"])
+    A([Stream A<br/>tob_valid snapshots]) --> F1[SPR]
+    A --> F2[TOBI]
+    A --> F3[OFI]
+    A --> F4[EMADEV]
+    A --> F5[MOM]
+    B([Stream B<br/>trade_valid, E and C only]) --> ACC[tflow_acc ring]
+    ACC -->|sampled by Stream A| F6[TFLOW]
+    F1 --> OUT([feat_valid])
     F2 --> OUT
     F3 --> OUT
     F4 --> OUT
     F5 --> OUT
     F6 --> OUT
-
-    classDef sa fill:#eff6ff,stroke:#2563eb
-    classDef sb fill:#fff4e5,stroke:#f59e0b
-    class TOB,F1,F2,F3,F4,F5 sa
-    class TR,ACC sb
 ```
 
 The trade accumulator updates in its own `always_ff` block, on its own event
@@ -56,32 +40,25 @@ One cycle from `tob_valid` to `feat_valid`, regardless of feature count — the
 depth is set by the deepest single feature, not their sum.
 
 ```mermaid
-flowchart TB
-    IN["tob_valid<br/>bid_idx, ask_idx, bid_qty, ask_qty"]
+flowchart LR
+    TOB([tob_valid]) --> PRE[mid, bidq, askq]
+    TRADE([trade_valid]) --> ACC[tflow_acc<br/>16-trade ring]
 
-    IN --> PRE["mid = bid_idx + ask_idx<br/><b>no >> 1</b><br/>bidq = bid_qty >>> QTY_SHIFT<br/>askq = ask_qty >>> QTY_SHIFT"]
+    PRE --> SPR
+    PRE --> TOBI
+    PRE --> OFI
+    PRE --> EMADEV
+    PRE --> MOM
+    ACC --> TFLOW
 
-    PRE --> D1["<b>SPR</b><br/>ask_idx - bid_idx"]
-    PRE --> D2["<b>TOBI</b><br/>bidq - askq"]
-    PRE --> D3["<b>OFI</b><br/>(bidq - prev_bidq)<br/>- (askq - prev_askq)"]
-    PRE --> D4["<b>EMADEV</b><br/>mid - (ema_frac >>> 4)"]
-    PRE --> D5["<b>MOM</b><br/>mid - mid_hist[7]"]
-    ACC["tflow_acc"] --> D6["<b>TFLOW</b><br/>tflow_acc >>> QTY_SHIFT"]
+    SPR --> SAT[sat16]
+    TOBI --> SAT
+    OFI --> SAT
+    EMADEV --> SAT
+    MOM --> SAT
+    TFLOW --> SAT
 
-    D1 --> S["<b>sat16</b><br/>clamp to signed 16 bits"]
-    D2 --> S
-    D3 --> S
-    D4 --> S
-    D5 --> S
-    D6 --> S
-    S --> OUT(["feat_valid + 6 × int16"])
-
-    D3 -.->|"update"| ST1["prev_bidq, prev_askq"]
-    D4 -.->|"update"| ST2["ema_frac"]
-    D5 -.->|"shift in"| ST3["mid_hist[0..7]"]
-
-    classDef state fill:#f3f4f6,stroke:#9ca3af,stroke-dasharray:3 3
-    class ST1,ST2,ST3 state
+    SAT --> OUT([feat_valid, 6 x int16])
 ```
 
 **No multiplier, no divider, anywhere.** Three choices make that possible:
@@ -98,15 +75,11 @@ The utilisation report proves it: **0 of 740 DSP slices**.
 
 ```mermaid
 flowchart TD
-    Q{"ema_init ?"}
-    Q -->|"no — first sample"| SEED["ema_frac ← mid << 4<br/>ema_init ← 1<br/><b>emadev = 0</b>"]
-    Q -->|yes| UPD["ema_int = ema_frac >>> 4<br/><b>emadev = sat16(mid - ema_int)</b><br/>ema_frac += ((mid << 4) - ema_frac) >>> 4"]
-
-    SEED --> ST["ema_frac<br/><i>carries 4 extra fraction bits</i>"]
+    Q{ema_init?}
+    Q -->|no, first sample| SEED[seed ema_frac<br/>emadev = 0]
+    Q -->|yes| UPD[emadev = mid - ema_int<br/>update ema_frac]
+    SEED --> ST[ema_frac carries<br/>4 extra fraction bits]
     UPD --> ST
-
-    classDef seed fill:#fff4e5,stroke:#f59e0b
-    class SEED seed
 ```
 
 **Why the 4 extra fraction bits.** An EMA whose state is a plain integer loses the
@@ -122,23 +95,20 @@ behaviour. The first snapshot seeds instead and reports `emadev = 0`.
 
 ```mermaid
 flowchart LR
-    subgraph MOM["MOM — mid shift register, depth 8"]
+    subgraph MOM["MOM — shift register, depth 8"]
         direction LR
-        M0["mid_hist[0]"] --> M1["[1]"] --> MD["..."] --> M7["<b>[7]</b>"]
+        M0[slot 0] --> M1[slot 1] --> MD[...] --> M7[slot 7]
     end
-    NEW["mid(t)"] --> M0
-    M7 --> DIFF["mom = sat16(mid(t) - mid_hist[7])"]
+    NEW([mid at t]) --> M0
+    M7 --> DIFF([mom = mid t minus mid t-8])
 
     subgraph TF["TFLOW — ring buffer, depth 16"]
         direction TB
-        RING["tflow_ring[0..15]"]
-        WR["tflow_wr pointer"]
-        SUM["tflow_acc += contrib - tflow_ring[wr]<br/>tflow_ring[wr] ← contrib<br/>wr++"]
+        SUM[add newest, subtract oldest]
+        RING[tflow_ring, 16 slots]
+        SUM --> RING
     end
-    TRADE["trade event"] --> CON["contrib = side ? +qty : -qty"]
-    CON --> SUM
-    SUM --> RING
-    WR --> SUM
+    TRADE([trade event]) --> CON[contrib = plus or minus qty] --> SUM
 ```
 
 The TFLOW ring is what keeps the window rolling without a re-sum: add the newest
@@ -155,20 +125,13 @@ so `contrib = resting_side ? +qty : −qty`.
 ```mermaid
 flowchart LR
     subgraph OFI["OFI after reset"]
-        O1["prev_bidq = 0<br/>prev_askq = 0"]
-        O2["so ofi = (bidq - 0) - (askq - 0)<br/>= bidq - askq<br/><b>= tobi, not 0</b>"]
-        O1 --> O2
+        direction TB
+        O1[prev_bidq = prev_askq = 0] --> O2[first ofi equals tobi<br/>not zero]
     end
-
     subgraph MOMI["MOM after reset"]
-        M1["mid_hist[0..7] = 0"]
-        M2["first 8 vectors compare<br/>against 0"]
-        M3["from the <b>9th</b> onward it is a<br/>true t vs t-8 difference"]
-        M1 --> M2 --> M3
+        direction TB
+        M1[eight history slots = 0] --> M2[first 8 vectors compare against 0] --> M3[true t vs t-8 from the 9th]
     end
-
-    classDef note fill:#fff4e5,stroke:#f59e0b
-    class O2,M2 note
 ```
 
 Both are written into [`handler_contract.md`](../handler_contract.md) precisely so
@@ -181,10 +144,10 @@ which side is wrong.
 
 ```mermaid
 flowchart LR
-    X["32-bit intermediate"] --> S{"sat16"}
-    S -->|"x > 32767"| H["32767"]
-    S -->|"x < -32768"| L["-32768"]
-    S -->|otherwise| P["x"]
+    X([32-bit intermediate]) --> S{sat16}
+    S -->|greater than 32767| H([32767])
+    S -->|less than -32768| L([-32768])
+    S -->|otherwise| P([x])
 ```
 
 All intermediate arithmetic is 32-bit; only the output is narrowed. Every shift is

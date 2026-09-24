@@ -13,26 +13,15 @@ One USB-UART carries the ITCH feed in and both frame types out.
 
 ```mermaid
 flowchart LR
-    PC(["host<br/>uart_feed.py"])
-    RX["uart_to_axis<br/><i>uart_rx + sync_fifo</i>"]
-    CORE["<b>top_v2</b><br/>the engine"]
-    LINK(["feature frames<br/>15 B, sync 0xA5"])
-    STAT(["status frames<br/>75 B, sync 0x5A"])
-    ARB["axis_arb2<br/>frame-atomic"]
-    TX["axis_to_uart<br/><i>uart_tx</i>"]
-
-    PC -->|"RX pin L14"| RX
-    RX -->|"① m_tdata / tvalid / tready"| CORE
-    CORE --> LINK
-    CORE -.->|"counters"| SR["status_reporter"]
-    SR --> STAT
-    LINK -->|"s0 — priority"| ARB
-    STAT -->|"s1"| ARB
-    ARB --> TX
-    TX -->|"TX pin L15"| PC
-
-    classDef io fill:#fff4e5,stroke:#f59e0b
-    class RX,TX,ARB,SR io
+    PC([host]) -->|RX pin| RXB[uart_to_axis]
+    RXB --> CORE[top_v2]
+    CORE --> FRM([feature frames])
+    CORE -.->|counters| SR[status_reporter]
+    SR --> STF([status frames])
+    FRM --> ARB[axis_arb2]
+    STF --> ARB
+    ARB --> TXB[axis_to_uart]
+    TXB -->|TX pin| PC
 ```
 
 No PS, no DMA, no Ethernet — the shortest path to seeing the whole datapath run on
@@ -41,24 +30,14 @@ real silicon against historical data.
 ## 2. Clock and reset generation in `top_board`
 
 ```mermaid
-flowchart TB
-    PIN["sys_clk_p / sys_clk_n<br/>200 MHz differential<br/>pins R4 / T4"]
-    IB["IBUFDS"]
-    MM["MMCME2_BASE<br/>CLKIN1_PERIOD 5.000<br/>CLKFBOUT_MULT_F 5 → <b>VCO 1000 MHz</b><br/>CLKOUT0_DIVIDE_F 10 → <b>100 MHz</b>"]
-    BG["BUFG ×2<br/>clk100 + feedback"]
-    LK{"LOCKED"}
-    BTN["rst_btn_n — F15<br/>→ button_debounce<br/>STABLE_CYCLES = 10 ms"]
-    SR["rst_sr — 4-bit shift register<br/><b>sync release, async assert</b>"]
-    ARSTN(["arstn → everything"])
-
-    PIN --> IB --> MM --> BG --> ARSTN
-    MM --> LK
-    LK -->|"not locked → hold reset"| SR
-    BTN -->|"pressed → hold reset"| SR
+flowchart TD
+    PIN([200 MHz differential<br/>pins R4 / T4]) --> IB[IBUFDS]
+    IB --> MM[MMCME2_BASE<br/>VCO 1000 MHz, divide 10]
+    MM --> BG[BUFG x2]
+    BG --> ARSTN([100 MHz to everything])
+    MM -->|LOCKED| SR[reset shift register<br/>sync release, async assert]
+    BTN([reset button F15]) --> DEB[button_debounce] --> SR
     SR --> ARSTN
-
-    classDef clk fill:#eff6ff,stroke:#2563eb
-    class PIN,IB,MM,BG clk
 ```
 
 **The VCO value is not free** — it must sit inside the Artix-7 −2 legal range,
@@ -75,11 +54,9 @@ configuration.
 
 ```mermaid
 flowchart LR
-    B["BAUD = 1,000,000<br/><i>CP2102GM maximum</i>"]
-    C["CLK_FREQ_HZ = 100,000,000"]
-    B --> D["CLKS_PER_BIT = 100<br/><b>exactly</b> — zero baud error"]
-    C --> D
-    D --> E["8-N-1 → 10 bits/byte<br/>10 µs per byte<br/><b>100 KB/s</b>"]
+    B([BAUD = 1,000,000]) --> D[CLKS_PER_BIT = 100<br/>exact, zero baud error]
+    C([CLK = 100 MHz]) --> D
+    D --> E([10 bits per byte<br/>10 us per byte, 100 KB/s])
 ```
 
 Must equal the host's baud (`uart_feed.py --baud 1000000`). 1 Mbaud divides 100 MHz
@@ -88,33 +65,19 @@ exactly, which is why it was chosen over a faster non-integer divisor.
 ## 4. The three bring-up LEDs
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph L1["rx_overflow_n — LED2, pin M13"]
         direction TB
-        O1["sync_fifo overflow<br/><i>1-cycle pulse, 10 ns</i>"]
-        O2["<b>latched sticky</b><br/>cleared only by reset"]
-        O3["dark = healthy<br/>lit = it happened at some point"]
-        O1 --> O2 --> O3
+        O1[FIFO overflow, 1-cycle pulse] --> O2[latched sticky] --> O3[dark = healthy]
     end
-
     subgraph L2["heartbeat_n — LED3, pin K14"]
         direction TB
-        H1["hb_cnt[25] toggles<br/>every 2^25 cycles"]
-        H2["~1.5 Hz blink"]
-        H3["<b>steady = clock or reset problem</b><br/>stop debugging further down"]
-        H1 --> H2 --> H3
+        H1[counter bit 25 toggles] --> H2[about 1.5 Hz blink] --> H3[steady = clock or reset problem]
     end
-
     subgraph L3["rx_activity_n — LED4, pin K13"]
         direction TB
-        A1["rx_byte_seen<br/><i>pre-FIFO, pre-core</i>"]
-        A2["stretched ~0.25 s"]
-        A3["proves bytes physically reach<br/>the chip, regardless of what<br/>the pipeline does with them"]
-        A1 --> A2 --> A3
+        A1[rx_byte_seen, pre-FIFO] --> A2[stretched 0.25 s] --> A3[bytes reach the chip]
     end
-
-    classDef warn fill:#fef2f2,stroke:#dc2626
-    class O3,H3 warn
 ```
 
 > **These pins are active-low: driving 0 lights the LED.** Hence the `_n` suffixes
@@ -131,14 +94,11 @@ happened", not "this is happening right now".
 
 ```mermaid
 flowchart TD
-    RX["rx_byte_seen"] --> TMR["idle_cnt<br/>reset on every byte"]
-    TMR --> Q{"idle_cnt == IDLE_CYCLES-1<br/>and had_activity<br/>and not sending ?"}
+    RX([rx_byte_seen]) --> TMR[idle_cnt, reset on every byte]
+    TMR --> Q{idle for IDLE_CYCLES?}
     Q -->|no| TMR
-    Q -->|yes| EMIT["assemble frame<br/>had_activity ← 0<br/><b>one frame per burst</b>"]
-    EMIT --> FR["0x5A | seq | 18 × uint32 | XOR<br/><b>75 bytes, big-endian</b>"]
-
-    classDef good fill:#ecfdf5,stroke:#059669
-    class FR good
+    Q -->|yes| EMIT[assemble frame<br/>one per burst]
+    EMIT --> FR([0x5A, seq, 18 x uint32, XOR<br/>75 bytes])
 ```
 
 **Why not an in-band command byte.** The inbound ITCH stream is a continuous
@@ -166,10 +126,10 @@ and the host decoder, not here.
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> GRANT0 : s0_tvalid<br/><b>features win ties</b>
-    IDLE --> GRANT1 : s1_tvalid and not s0_tvalid
-    GRANT0 --> IDLE : not s0_tvalid<br/><i>frame complete</i>
-    GRANT1 --> IDLE : not s1_tvalid<br/><i>frame complete</i>
+    IDLE --> GRANT0: s0_tvalid, features win ties
+    IDLE --> GRANT1: s1_tvalid only
+    GRANT0 --> IDLE: s0_tvalid falls
+    GRANT1 --> IDLE: s1_tvalid falls
 ```
 
 Both producers hold `tvalid` high for a whole frame and drop it only at the frame

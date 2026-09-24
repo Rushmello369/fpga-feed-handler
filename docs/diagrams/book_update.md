@@ -15,33 +15,24 @@ Five states, 5 cycles per update, one in flight. `bu_ready = (state == IDLE)`.
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> ADDR1 : bu_valid<br/>latch is_add, price, qty, side
-    ADDR1 --> ADDR2 : window bounds check<br/><b>+ subtract only</b>
-    ADDR2 --> READ : in_window<br/><b>the divide, alone</b>
-    ADDR2 --> IDLE : not in_window<br/><b>oow_count++</b>, drop
-    READ --> WRITE : registered read of qty<br/>+ latch the mask bit
-    WRITE --> IDLE : add or subtract, clamp at 0<br/>write qty + mask<br/><b>book_updated pulse</b>
-
-    note right of ADDR1
-        Splitting ADDR into two states
-        is what closed 100 MHz —
-        see section 3
-    end note
+    IDLE --> ADDR1: bu_valid
+    ADDR1 --> ADDR2: bounds check + subtract
+    ADDR2 --> READ: in window
+    ADDR2 --> IDLE: out of window
+    READ --> WRITE: read qty + mask bit
+    WRITE --> IDLE: write back, strobe
 ```
 
 ## 2. Address computation
 
 ```mermaid
 flowchart LR
-    P["bu_price<br/>raw Price(4)<br/>dollars × 10,000"]
-    P --> CHK{"price >= BASE_PRICE<br/>and price < BASE_PRICE<br/>+ WINDOW_SIZE × TICK_SIZE ?"}
-    CHK -->|no| OOW["<b>oow_count++</b><br/>dropped silently"]
-    CHK -->|yes| SUB["diff = price - BASE_PRICE<br/><i>narrowed to DIFF_W = 17 bits</i>"]
-    SUB --> DIV["lvl = diff / TICK_SIZE<br/><i>TICK_SIZE = 100</i>"]
-    DIV --> ADDR["level index<br/>ADDR_W = 10 bits"]
-
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    class OOW bad
+    P([bu_price<br/>Price 4, dollars x 10000])
+    P --> CHK{inside window?}
+    CHK -->|no| OOW([oow_count++, dropped])
+    CHK -->|yes| SUB[diff = price - BASE_PRICE<br/>narrowed to 17 bits]
+    SUB --> DIV[lvl = diff / TICK_SIZE]
+    DIV --> ADDR([level index, 10 bits])
 ```
 
 ITCH `Price(4)` has four implied decimals, but US equities quote in pennies — so
@@ -57,24 +48,17 @@ At `BASE_PRICE = 1,610,800` and `WINDOW_SIZE = 1024`, the window covers
 This address computation was the design's critical path at **WNS −0.055 ns**.
 
 ```mermaid
-flowchart TB
+flowchart TD
     subgraph BEFORE["before — one ADDR state"]
         direction LR
-        B1["32-bit compare<br/>window bounds"] --> B2["32-bit subtract"] --> B3["<b>32-bit divide</b><br/>by TICK_SIZE"]
+        B1[32-bit bounds check] --> B2[32-bit subtract] --> B3[32-bit divide]
     end
-
-    subgraph AFTER["after — ADDR1 / ADDR2"]
+    subgraph AFTER["after — ADDR1 then ADDR2"]
         direction LR
-        A1["ADDR1<br/>bounds check<br/>+ subtract"] -.->|"register"| A2["ADDR2<br/><b>17-bit divide</b><br/>alone"]
+        A1[bounds check + subtract] -.->|register| A2[17-bit divide]
     end
-
-    BEFORE -->|"WNS −0.055 ns<br/>✗ fails"| AFTER
-    AFTER -->|"WNS +0.333 ns<br/>✓ met"| OK(["100 MHz closed"])
-
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    classDef good fill:#ecfdf5,stroke:#059669
-    class BEFORE bad
-    class AFTER,OK good
+    BEFORE -->|WNS -0.055 ns, fails| AFTER
+    AFTER -->|WNS +0.333 ns, met| OK([100 MHz closed])
 ```
 
 **The fix worked twice over, and that is the interesting part.** Splitting the
@@ -87,28 +71,18 @@ cycle. Both effects together produced the positive slack.
 ## 4. Storage, and why the mask is the source of truth
 
 ```mermaid
-flowchart TB
-    subgraph SIDE["per side — bid and ask"]
-        direction TB
-        QTY["<b>qty array</b><br/>WINDOW_SIZE × 32 bits<br/>BRAM<br/><i>never globally cleared</i>"]
-        MASK["<b>occupancy mask</b><br/>WINDOW_SIZE × 1 bit<br/>distributed RAM<br/><b>IS reset</b>"]
-    end
-
-    RD["READ state"] --> QTY
-    RD --> MASK
-    QTY -->|old_qty| GATE{"old_valid ?<br/><i>the mask bit</i>"}
+flowchart TD
+    RD[READ state]
+    RD --> QTY[qty array<br/>BRAM, never cleared]
+    RD --> MASK[occupancy mask<br/>distributed RAM, reset]
+    QTY -->|old_qty| GATE{mask bit set?}
     MASK -->|old_valid| GATE
-    GATE -->|yes| USE["eff_old = old_qty"]
-    GATE -->|no| ZERO["eff_old = 0<br/><i>ignore stale BRAM</i>"]
-
-    USE --> CALC
+    GATE -->|yes| USE[eff_old = old_qty]
+    GATE -->|no| ZERO[eff_old = 0]
+    USE --> CALC[add, or subtract clamped at 0]
     ZERO --> CALC
-    CALC["is_add ?<br/>eff_old + qty<br/>: max(eff_old - qty, 0)"]
-    CALC --> WR["qty[lvl] ← new_qty<br/>mask[lvl] ← (new_qty != 0)"]
-    WR --> STROBE(["<b>book_updated</b><br/>the timing anchor<br/>for everything downstream"])
-
-    classDef anchor fill:#fef2f2,stroke:#dc2626,stroke-width:2px
-    class STROBE anchor
+    CALC --> WR[write qty and mask]
+    WR --> STROBE([book_updated])
 ```
 
 **BRAM contents have no reset.** The quantity arrays power up holding whatever
@@ -126,13 +100,10 @@ book permanently rather than transiently.
 
 ```mermaid
 flowchart LR
-    TT["<b>tob_tracker</b><br/>the requester"]
-    BU["<b>book_update</b><br/>the storage"]
-
-    TT -->|"bid_rd_addr →"| BU
-    BU -->|"← bid_rd_data<br/>1-cycle registered"| TT
-    TT -->|"ask_rd_addr →"| BU
-    BU -->|"← ask_rd_data<br/>1-cycle registered"| TT
+    TT[tob_tracker<br/>the requester]
+    BU[book_update<br/>the storage]
+    TT -->|addr out| BU
+    BU -->|data in, 1 cycle| TT
 ```
 
 > **Read-port direction is the most commonly reversed thing in this design.**

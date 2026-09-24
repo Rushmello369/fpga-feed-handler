@@ -12,24 +12,15 @@ and the best bid — at fixed 2-cycle latency. Source:
 ## 1. Module hierarchy
 
 ```mermaid
-flowchart TB
-    PE["<b>priority_encoder</b><br/>both ports, handles the reversal<br/><i>clocked</i>"]
-    RA["<b>radix_find_lowest</b> u_ask<br/>the 2-cycle tree<br/><i>clocked</i>"]
-    RB["<b>radix_find_lowest</b> u_bid<br/>same tree, reversed mask<br/><i>clocked</i>"]
-    FL["<b>find_lowest</b> × NUM_GROUPS<br/>32-bit leaf<br/><i>combinational</i>"]
-    O2B["<b>onehot2bin</b><br/>fixed 32 → 5<br/><i>combinational</i>"]
-    O2BG["<b>onehot2bin_gen</b><br/>generic W → log₂W<br/><i>combinational</i>"]
-
-    PE --> RA
-    PE --> RB
-    RA --> FL
-    RA --> O2BG
+flowchart TD
+    PE[priority_encoder<br/>both ports, clocked]
+    PE --> RA[radix_find_lowest<br/>ask side]
+    PE --> RB[radix_find_lowest<br/>bid side, reversed mask]
+    RA --> FL[find_lowest x N<br/>combinational]
     RB --> FL
+    RA --> O2BG[onehot2bin_gen]
     RB --> O2BG
-    FL --> O2B
-
-    classDef comb fill:#f3f4f6,stroke:#9ca3af
-    class FL,O2B,O2BG comb
+    FL --> O2B[onehot2bin<br/>fixed 32 to 5]
 ```
 
 `onehot2bin_gen` exists because the two tree levels are only the same width at
@@ -40,14 +31,8 @@ fixed 32-bit version stays the leaf primitive.
 
 ```mermaid
 flowchart LR
-    subgraph NAIVE["for-loop with a found flag"]
-        direction LR
-        N0["bit 0"] --> N1["bit 1"] --> N2["bit 2"] --> NDOTS["..."] --> N1023["bit 1023"]
-    end
-    NAIVE --> RES["<b>logic depth O(N)</b><br/>63.7 ns measured<br/>≈ 15.7 MHz"]
-
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    class NAIVE,RES bad
+    N0[bit 0] --> N1[bit 1] --> N2[bit 2] --> ND[...] --> N1023[bit 1023]
+    N1023 --> RES([63.7 ns, about 15.7 MHz])
 ```
 
 A `for` inside `always_comb` is not a loop — there is no counter in hardware.
@@ -59,36 +44,25 @@ a synthesis-effort problem: no directive shortens a 1024-deep dependency chain.
 ## 3. The radix-32 tree
 
 ```mermaid
-flowchart TB
-    VEC["vec — 1024 bits"]
-
-    subgraph L0["level 0 — 32 leaves, all in parallel, combinational"]
+flowchart TD
+    VEC([vec, 1024 bits])
+    VEC --> L0
+    subgraph L0["level 0 — 32 leaves, parallel, combinational"]
         direction LR
-        G0["find_lowest<br/>bits 0-31"]
-        G1["find_lowest<br/>bits 32-63"]
-        GD["..."]
-        G31["find_lowest<br/>bits 992-1023"]
+        G0[find_lowest]
+        G1[find_lowest]
+        GD[...]
+        G31[find_lowest]
     end
-
-    REG1["<b>pipeline register 1</b><br/>leaf_addr_q[32], leaf_hit_q[32]"]
-
-    subgraph L1["level 1 — group stage"]
-        direction TB
-        ISO["grp_oh = hit & (~hit + 1)<br/>isolate lowest group"]
-        O2B["onehot2bin_gen<br/>→ grp_sel, 5 bits"]
-        MUX["mux: leaf_addr_q[grp_sel]<br/>→ local_addr, 5 bits"]
+    L0 --> REG1[pipeline register 1]
+    REG1 --> L1
+    subgraph L1["level 1 — pick the lowest group"]
+        direction LR
+        ISO[isolate group] --> O2B[onehot2bin_gen] --> MUX[select local addr]
     end
-
-    CONCAT["addr = {grp_sel, local_addr}<br/><b>zero gates</b>"]
-    REG2["<b>pipeline register 2</b><br/>addr, valid"]
-    OUT(["addr + valid<br/>2 cycles after vec"])
-
-    VEC --> L0 --> REG1 --> L1
-    ISO --> O2B --> MUX
-    L1 --> CONCAT --> REG2 --> OUT
-
-    classDef free fill:#ecfdf5,stroke:#059669
-    class CONCAT free
+    L1 --> CAT[concatenate, zero gates]
+    CAT --> REG2[pipeline register 2]
+    REG2 --> OUT([addr + valid, t+2])
 ```
 
 **Depth O(N) → O(log N).** 1024 serial stages become two shallow parallel levels.
@@ -104,21 +78,13 @@ no adder, no gates. This is why the radix must be a power of two, and why
 flowchart LR
     subgraph P1["isolate the lowest set bit"]
         direction TB
-        I1["mask"]
-        I2["~mask + 1<br/><i>two's complement negation</i><br/>one carry chain"]
-        I3["mask & (~mask + 1)<br/><b>exactly one bit set</b>"]
-        I1 --> I2 --> I3
+        I1[mask] --> I2[negate: not mask plus 1] --> I3[AND: exactly one bit]
     end
-
-    subgraph P2["one-hot → binary, 5 OR-reductions"]
+    subgraph P2["one-hot to binary"]
         direction TB
-        B0["bin[0] = OR-reduce of oh AND 0xAAAAAAAA"]
-        B1["bin[1] = OR-reduce of oh AND 0xCCCCCCCC"]
-        B2["bin[2] = OR-reduce of oh AND 0xF0F0F0F0"]
-        B3["bin[3] = OR-reduce of oh AND 0xFF00FF00"]
-        B4["bin[4] = OR-reduce of oh AND 0xFFFF0000"]
+        B0[five OR-reductions<br/>over fixed masks]
+        B1[each output bit is<br/>an independent 16-input OR]
     end
-
     P1 --> P2
 ```
 
@@ -135,13 +101,10 @@ with no priority logic at all.
 
 ```mermaid
 flowchart LR
-    BM["bid_mask"] --> REV["mask_rev[i] = mask[N-1-i]<br/><b>pure rewiring, zero gates</b>"]
-    REV --> TREE["the same radix tree<br/>finds the lowest"]
-    TREE --> MAP["addr = (N-1) - idx_rev"]
-    MAP --> OUT(["best_bid_addr"])
-
-    classDef free fill:#ecfdf5,stroke:#059669
-    class REV free
+    BM([bid_mask]) --> REV[reverse: pure rewiring]
+    REV --> TREE[same tree finds lowest]
+    TREE --> MAP[map back: N-1 minus idx]
+    MAP --> OUT([best_bid_addr])
 ```
 
 Best ask is the lowest price with liquidity; best bid is the highest. One tree

@@ -11,24 +11,11 @@ Packs one feature vector into a 15-byte frame and serialises it. Source:
 
 ```mermaid
 flowchart LR
-    B0["<b>0</b><br/>SYNC<br/>0xA5"]
-    B1["<b>1</b><br/>SEQ<br/>mod 256"]
-    B2["<b>2-3</b><br/>spr"]
-    B4["<b>4-5</b><br/>tobi"]
-    B6["<b>6-7</b><br/>ofi"]
-    B8["<b>8-9</b><br/>emadev"]
-    B10["<b>10-11</b><br/>mom"]
-    B12["<b>12-13</b><br/>tflow"]
-    B14["<b>14</b><br/>CHK<br/>XOR 0-13"]
-
-    B0 --- B1 --- B2 --- B4 --- B6 --- B8 --- B10 --- B12 --- B14
-
-    classDef sync fill:#eff6ff,stroke:#2563eb
-    classDef feat fill:#ecfdf5,stroke:#059669
-    classDef chk fill:#fff4e5,stroke:#f59e0b
-    class B0,B1 sync
-    class B2,B4,B6,B8,B10,B12 feat
-    class B14 chk
+    B0[byte 0<br/>SYNC A5]
+    B1[byte 1<br/>SEQ]
+    B2[bytes 2-13<br/>six int16, big-endian]
+    B14[byte 14<br/>XOR checksum]
+    B0 --- B1 --- B2 --- B14
 ```
 
 Six `signed int16`, **big-endian**, in frozen order. Big-endian to stay consistent
@@ -45,17 +32,11 @@ Not an enumerated FSM — two flags, `sending` and `pend_valid`.
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> IDLE : feat_valid<br/>latch into p_* registers<br/>pend_valid ← 1
-    IDLE --> SENDING : not sending and pend_valid<br/><b>assemble all 15 bytes</b><br/>+ inline checksum<br/>seq++, pend_valid ← 0
-    SENDING --> SENDING : tx_ready<br/>byte_idx++<br/>tx_data ← frame[byte_idx+1]
-    SENDING --> IDLE : byte_idx == 14 and tx_ready<br/>tx_valid ← 0
-    SENDING --> SENDING : feat_valid<br/>replace pending vector
-
-    note right of SENDING
-        tx_valid is held HIGH for the
-        WHOLE frame, which is what makes
-        the arbiter's grant frame-atomic
-    end note
+    IDLE --> IDLE: feat_valid, latch pending
+    IDLE --> SENDING: assemble 15 bytes
+    SENDING --> SENDING: tx_ready, next byte
+    SENDING --> SENDING: feat_valid, replace pending
+    SENDING --> IDLE: last byte accepted
 ```
 
 **The checksum is computed inline from the pending values**, not from the
@@ -69,23 +50,10 @@ One pending vector, no queue.
 
 ```mermaid
 flowchart TD
-    FV["feat_valid arrives"]
-    FV --> Q{"pend_valid<br/>already set ?"}
-    Q -->|no| OK["latch it<br/><b>nothing lost</b>"]
-    Q -->|yes| DROP["latch it<br/><b>drop_count++</b><br/>the waiting vector is overwritten"]
-
-    subgraph WAS["the bug — condition was (sending OR pend_valid)"]
-        direction TB
-        W1["arriving while <i>sending</i><br/>counted as a drop"]
-        W2["but the previous vector was already<br/>latched into the frame in flight —<br/>this one just becomes pending<br/>and goes out next"]
-        W3["<b>nothing was actually lost</b>"]
-        W1 --> W2 --> W3
-    end
-
-    classDef good fill:#ecfdf5,stroke:#059669
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    class OK good
-    class WAS bad
+    FV([feat_valid arrives]) --> Q{pend_valid already set?}
+    Q -->|no| OK([latch it, nothing lost])
+    Q -->|yes| DROP([latch it, drop_count++])
+    WAS[old condition also counted<br/>arrivals while sending,<br/>which lose nothing]
 ```
 
 **How the bug was caught.** A 200k-message replay reported `drop_count = 2160`
@@ -111,22 +79,13 @@ contradicted each other, and the frame assertions were right.
 ```mermaid
 flowchart LR
     subgraph FIFO["a queue"]
-        F1["oldest vector<br/>sent first"]
-        F2["under sustained back-pressure,<br/>the receiver acts on<br/><b>stale market state</b>"]
-        F1 --> F2
+        direction TB
+        F1[oldest sent first] --> F2[receiver acts on stale state]
     end
-
     subgraph DO["drop-oldest"]
-        D1["newest vector wins"]
-        D2["receiver always acts on<br/><b>the current book</b>"]
-        D3["losses are counted and<br/>visible via SEQ gaps"]
-        D1 --> D2 --> D3
+        direction TB
+        D1[newest wins] --> D2[receiver acts on current book] --> D3[losses visible via SEQ]
     end
-
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    classDef good fill:#ecfdf5,stroke:#059669
-    class FIFO bad
-    class DO good
 ```
 
 For a decision engine the newest market state is strictly more valuable than a
@@ -139,16 +98,8 @@ per-event-complete inference.
 
 ```mermaid
 flowchart TD
-    R1["search for 0xA5<br/>frame sync"]
-    R2["receive fixed 15 bytes"]
-    R3["verify XOR checksum"]
-    R4["check SEQ continuity"]
-    R5["restore six big-endian<br/>signed int16"]
-    R6["one valid <b>only</b> for<br/>complete, checksum-passing frames"]
-    R7["count checksum errors,<br/>sequence gaps, valid frames"]
-
-    R1 --> R2 --> R3 --> R4 --> R5 --> R6
-    R3 -.-> R7
+    R1[search for 0xA5] --> R2[receive 15 bytes] --> R3[verify XOR] --> R4[check SEQ continuity] --> R5[restore six int16] --> R6[one valid per good frame]
+    R3 -.-> R7[count errors and gaps]
     R4 -.-> R7
 ```
 

@@ -112,35 +112,44 @@ the update is a pure arithmetic shift.
 ## 3. Architecture
 
 ```mermaid
-flowchart LR
-    IN(["ITCH byte stream<br/>8-bit"]) 
-    PARSE["<b>itch_parser</b><br/>framing + field extraction<br/>+ stock_locate filter"]
-    DISP["<b>event_dispatcher</b><br/>8-state FSM<br/>owns all cross-module logic"]
-    LOOK["<b>order_lookup</b><br/>direct-mapped, 2^14 entries<br/>3 cycles"]
-    BOOK["<b>book_update</b><br/>qty arrays + occupancy masks<br/>5 cycles"]
-    ENC["<b>priority_encoder</b><br/>radix-32 tree<br/>2 cycles, fixed"]
-    TOB["<b>tob_tracker</b><br/>snapshot assembly<br/>t+2 latch, t+4 publish"]
-    FEAT["<b>feature_engine</b><br/>6 features in parallel<br/>1 cycle"]
-    LINK["<b>board_link_tx</b><br/>15-byte frame<br/>drop-oldest"]
-    OUT(["feature frame<br/>byte stream"])
+flowchart TD
+    IN([ITCH bytes in])
+    PARSE[itch_parser]
+    DISP[event_dispatcher]
+    LOOK[order_lookup]
+    BOOK[book_update]
+    ENC[priority_encoder]
+    TOB[tob_tracker]
+    FEAT[feature_engine]
+    LINK[board_link_tx]
+    OUT([feature frames out])
 
-    IN -->|"① tvalid / tready"| PARSE
-    PARSE -->|"① ev_valid / ev_ready"| DISP
-    DISP -->|"② ins_valid / qry_valid<br/>guarded by lk_busy"| LOOK
-    LOOK -->|"③ res_valid pulse<br/>price, side, delta_qty"| DISP
-    DISP -->|"② bu_valid / bu_ready"| BOOK
-    BOOK -->|"④ bid_mask, ask_mask<br/>continuous"| ENC
-    ENC -->|"④ best addr + valid<br/>2 cycles stale"| TOB
-    TOB <-->|"④ addr out, data in<br/>registered read"| BOOK
-    BOOK -->|"③ book_updated<br/><b>the timing anchor</b>"| TOB
-    TOB -->|"③ tob_valid + tob_t"| FEAT
-    DISP -->|"③ trade_valid<br/><b>independent stream</b>"| FEAT
-    FEAT -->|"③ feat_valid + 6×int16"| LINK
-    LINK -->|"① tvalid / tready"| OUT
-
-    classDef anchor stroke:#dc2626,stroke-width:2px
-    class BOOK anchor
+    IN --> PARSE
+    PARSE -->|event| DISP
+    DISP <-->|resolve id| LOOK
+    DISP -->|add / remove| BOOK
+    BOOK -->|masks| ENC
+    ENC -->|best levels| TOB
+    BOOK -->|book_updated| TOB
+    TOB -.->|read port| BOOK
+    TOB -->|snapshot| FEAT
+    DISP -->|trade tap| FEAT
+    FEAT --> LINK
+    LINK --> OUT
 ```
+
+Each block's cost, and which handshake pattern carries its output:
+
+| Block | Cycles | Output pattern |
+|---|---|---|
+| `itch_parser` | 1 byte/cycle | ① stream with back-pressure |
+| `event_dispatcher` | 7–12, data dependent | ② command strobes |
+| `order_lookup` | 3 | ③ result pulse |
+| `book_update` | 5 | ③ `book_updated` + ④ masks |
+| `priority_encoder` | **2, fixed** | ④ bare wires |
+| `tob_tracker` | **5, fixed** | ③ result pulse |
+| `feature_engine` | **1, fixed** | ③ result pulse |
+| `board_link_tx` | 15 bytes | ① stream with back-pressure |
 
 **Interface patterns.** There are only five in the whole design, and recognising
 which one a port group belongs to is faster than memorising signal names:
@@ -178,33 +187,29 @@ Replace exists.
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-
-    IDLE --> ADD_ISSUE : ev_valid and type is A or F
-    IDLE --> QRY_ISSUE : ev_valid and type is<br/>E, C, X, D or U
-
-    ADD_ISSUE --> ADD_WAIT : not lk_busy and bu_ready<br/>fire ins_valid + bu_valid<br/><b>same cycle</b>
-    ADD_WAIT --> IDLE : not lk_busy and bu_ready<br/>both units drained
-
-    QRY_ISSUE --> QRY_WAIT : not lk_busy<br/>fire qry_valid with op
-    QRY_WAIT --> BOOK_REMOVE : res_valid and res_hit<br/>latch price, qty, side
-    QRY_WAIT --> IDLE : res_valid and not res_hit<br/><b>miss_count++</b>
-
-    BOOK_REMOVE --> IDLE : bu_ready, not a Replace
-    BOOK_REMOVE --> RPL_WAIT : bu_ready, is_replace
-    RPL_WAIT --> RPL_INSERT : <b>not bu_ready</b><br/>book has taken the remove
-    RPL_INSERT --> ADD_WAIT : not lk_busy and bu_ready<br/>insert new id, side inherited
-
-    note right of ADD_ISSUE
-        Add: everything is on the
-        wire, so lookup insert and
-        book add fire in parallel
-    end note
-
-    note right of RPL_WAIT
-        Waits for bu_ready to FALL,
-        not rise
-    end note
+    IDLE --> ADD_ISSUE: A / F
+    IDLE --> QRY_ISSUE: E C X D U
+    ADD_ISSUE --> ADD_WAIT: fire both
+    ADD_WAIT --> IDLE: drained
+    QRY_ISSUE --> QRY_WAIT: query sent
+    QRY_WAIT --> BOOK_REMOVE: hit
+    QRY_WAIT --> IDLE: miss
+    BOOK_REMOVE --> IDLE: not Replace
+    BOOK_REMOVE --> RPL_WAIT: Replace
+    RPL_WAIT --> RPL_INSERT: bu_ready fell
+    RPL_INSERT --> ADD_WAIT: new order in
 ```
+
+| State | Guard to leave it | What it does |
+|---|---|---|
+| `IDLE` | `ev_valid` | latch the event, branch on `msg_type` |
+| `ADD_ISSUE` | `!lk_busy && bu_ready` | fire `ins_valid` **and** `bu_valid` in the same cycle |
+| `ADD_WAIT` | `!lk_busy && bu_ready` | wait for both units to drain |
+| `QRY_ISSUE` | `!lk_busy` | fire `qry_valid` with `OP_EXECUTE` / `OP_CANCEL` / `OP_DELETE` |
+| `QRY_WAIT` | `res_valid` | hit → latch price/side/qty; miss → `miss_count++`, abandon |
+| `BOOK_REMOVE` | `bu_ready` | issue the remove at the **resolved** level |
+| `RPL_WAIT` | `!bu_ready` | wait for the book to actually take the remove |
+| `RPL_INSERT` | `!lk_busy && bu_ready` | insert the new id, side inherited from step 1 |
 
 `ev_ready` is high **only in `IDLE`**, which is what enforces one event in flight
 end to end. `RPL_WAIT` looks redundant and is not: the remove strobe is a
@@ -273,25 +278,28 @@ each arriving byte into the low end. No byte reversal, no holding buffer.
 ```mermaid
 stateDiagram-v2
     [*] --> RD_LEN_HI
-
-    RD_LEN_HI --> RD_LEN_LO : s_tvalid<br/>msg_len[15:8] ← byte
-    RD_LEN_LO --> RD_BODY : s_tvalid<br/>msg_len[7:0] ← byte<br/>idx ← 0, ev ← 0
-    RD_BODY --> RD_BODY : s_tvalid and idx < msg_len-1<br/>extract field, idx++
-    RD_BODY --> EMIT : last byte, known type,<br/>length matches, book-affecting,<br/>locate matches
-    RD_BODY --> RD_LEN_HI : last byte and any of —<br/>unknown type, length mismatch,<br/>wrong symbol, admin type
-    EMIT --> RD_LEN_HI : ev_ready
-
-    note right of RD_BODY
-        s_tready is HIGH here
-        one byte per cycle
-    end note
-
-    note right of EMIT
-        s_tready is LOW
-        event held until the
-        dispatcher accepts it
-    end note
+    RD_LEN_HI --> RD_LEN_LO: length high byte
+    RD_LEN_LO --> RD_BODY: length low byte
+    RD_BODY --> RD_BODY: extract field, idx++
+    RD_BODY --> EMIT: event accepted
+    RD_BODY --> RD_LEN_HI: dropped
+    EMIT --> RD_LEN_HI: ev_ready
 ```
+
+`s_tready = (state != EMIT)` — the parser accepts a byte every cycle except while
+holding a finished event for the dispatcher. That is the **single point of
+back-pressure** in the core, and it is why parsing the next message overlaps with
+the current one's processing rather than serialising behind it.
+
+At the last body byte, four things can send it back to `RD_LEN_HI` with no event,
+tested in this order:
+
+| Condition | Outcome |
+|---|---|
+| type not recognised | `unknown_count++` |
+| known type, **length prefix ≠ spec length** | `parse_error` pulse, event suppressed |
+| known type, not book-affecting (`S`, `R`) | no event |
+| book-affecting, `stock_locate` ≠ `FILTER_LOCATE` | `filtered_count++` |
 
 > 📐 **[More `itch_parser` diagrams →](docs/diagrams/itch_parser.md)** — the
 > end-of-message decision tree with all four outcomes, and per-type field offsets.
@@ -359,29 +367,23 @@ means the window is mis-centred, not that the design is broken.
 ### `order_lookup` — the per-order state ITCH forces on you
 
 ```mermaid
-flowchart TB
-    ID["order_id — 64 bits"]
-    ID --> IDX["low 14 bits<br/><b>index</b>"]
-    ID --> TAG["high 50 bits<br/><b>tag</b>"]
-
+flowchart TD
+    ID([order_id, 64 bits])
+    ID -->|low 14 bits| IDX[index]
+    ID -->|high 50 bits| TAG[tag]
     IDX --> MEM
-
-    subgraph MEM["five separate arrays, 2^14 = 16,384 entries each"]
+    subgraph MEM["16,384 entries, five parallel arrays"]
         direction LR
-        M1["mem_valid<br/>1 bit"]
-        M2["mem_tag<br/>50 bits"]
-        M3["mem_price<br/>32 bits"]
-        M4["mem_side<br/>1 bit"]
-        M5["mem_qty<br/>32 bits"]
+        M1[valid]
+        M2[tag]
+        M3[price]
+        M4[side]
+        M5[qty]
     end
-
-    TAG --> CMP{"rd_tag == req_tag<br/>and rd_valid ?"}
-    MEM --> CMP
-    CMP -->|yes| HIT["res_hit = 1<br/>price, side, delta_qty"]
-    CMP -->|no| MISS["res_hit = 0<br/>unknown or <b>evicted</b> id<br/>miss_count++"]
-
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    class MISS bad
+    MEM --> CMP{tag match?}
+    TAG --> CMP
+    CMP -->|yes| HIT([price, side, delta_qty])
+    CMP -->|no| MISS([miss_count++])
 ```
 
 The index is the low bits of the order id with no rehashing, and collisions are
@@ -404,12 +406,12 @@ would be ~1.9 Mbit, over Vivado's 1,000,000-bit per-variable elaboration limit
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> ADDR1 : bu_valid<br/>latch is_add, price, qty, side
-    ADDR1 --> ADDR2 : window bounds check<br/><b>+ subtract only</b>
-    ADDR2 --> READ : in_window<br/><b>the divide, alone</b>
-    ADDR2 --> IDLE : not in_window<br/><b>oow_count++</b>, drop
-    READ --> WRITE : registered read of qty<br/>+ latch the mask bit
-    WRITE --> IDLE : add or subtract, clamp at 0<br/>write qty + mask<br/><b>book_updated pulse</b>
+    IDLE --> ADDR1: bu_valid
+    ADDR1 --> ADDR2: bounds check + subtract
+    ADDR2 --> READ: in window
+    ADDR2 --> IDLE: out of window
+    READ --> WRITE: read qty + mask bit
+    WRITE --> IDLE: write back, strobe
 ```
 
 The address computation occupies **two** states because it was the design's
@@ -437,36 +439,25 @@ Depth goes from O(N) to O(log N), and `{grp_sel, local_addr}` is the final
 address for free because 32 is a power of two.
 
 ```mermaid
-flowchart TB
-    VEC["vec — 1024 bits"]
-
-    subgraph L0["level 0 — 32 leaves, all in parallel, combinational"]
+flowchart TD
+    VEC([vec, 1024 bits])
+    VEC --> L0
+    subgraph L0["level 0 — 32 leaves, parallel, combinational"]
         direction LR
-        G0["find_lowest<br/>bits 0-31"]
-        G1["find_lowest<br/>bits 32-63"]
-        GD["..."]
-        G31["find_lowest<br/>bits 992-1023"]
+        G0[find_lowest]
+        G1[find_lowest]
+        GD[...]
+        G31[find_lowest]
     end
-
-    REG1["<b>pipeline register 1</b><br/>leaf_addr_q[32], leaf_hit_q[32]"]
-
-    subgraph L1["level 1 — group stage"]
-        direction TB
-        ISO["grp_oh = hit & (~hit + 1)<br/>isolate lowest group"]
-        O2B["onehot2bin_gen<br/>→ grp_sel, 5 bits"]
-        MUX["mux: leaf_addr_q[grp_sel]<br/>→ local_addr, 5 bits"]
+    L0 --> REG1[pipeline register 1]
+    REG1 --> L1
+    subgraph L1["level 1 — pick the lowest group"]
+        direction LR
+        ISO[isolate group] --> O2B[onehot2bin_gen] --> MUX[select local addr]
     end
-
-    CONCAT["addr = {grp_sel, local_addr}<br/><b>zero gates</b>"]
-    REG2["<b>pipeline register 2</b><br/>addr, valid"]
-    OUT(["addr + valid<br/>2 cycles after vec"])
-
-    VEC --> L0 --> REG1 --> L1
-    ISO --> O2B --> MUX
-    L1 --> CONCAT --> REG2 --> OUT
-
-    classDef free fill:#ecfdf5,stroke:#059669
-    class CONCAT free
+    L1 --> CAT[concatenate, zero gates]
+    CAT --> REG2[pipeline register 2]
+    REG2 --> OUT([addr + valid, t+2])
 ```
 
 The bid side needs the *highest* set bit: the mask is reversed by pure rewiring,
@@ -494,19 +485,9 @@ No FSM; a 4-bit shift register off `book_updated` with exactly two taps.
 
 ```mermaid
 flowchart LR
-    BU(["book_updated<br/>t+0"])
-    S0["upd_shift[0]<br/>t+1"]
-    S1["upd_shift[1]<br/><b>t+2 — TAP</b>"]
-    S2["upd_shift[2]<br/>t+3"]
-    S3["upd_shift[3]<br/><b>t+4 — TAP</b>"]
-
-    BU --> S0 --> S1 --> S2 --> S3
-
-    S1 --> LAUNCH["<b>launch reads + latch</b><br/>bid_rd_addr ← best_bid_addr<br/>lat_bid_addr ← best_bid_addr<br/>lat_bid_valid ← best_bid_valid"]
-    S3 --> PUB["<b>publish</b><br/>tob.bid_idx ← lat_bid_addr<br/>tob.bid_qty ← bid_rd_data<br/>tob_valid ← both sides valid"]
-
-    classDef tap fill:#fef2f2,stroke:#dc2626,stroke-width:2px
-    class S1,S3 tap
+    BU([book_updated]) --> S0[t+1] --> S1[t+2] --> S2[t+3] --> S3[t+4]
+    S1 --> LAUNCH[launch reads<br/>latch addr + valid]
+    S3 --> PUB[publish snapshot]
 ```
 
 The encoder's outputs are **live combinational wires**. Latching address *and*
@@ -549,32 +530,25 @@ regardless of how many features there are, because the depth is set by the
 deepest single feature rather than their sum.
 
 ```mermaid
-flowchart TB
-    IN["tob_valid<br/>bid_idx, ask_idx, bid_qty, ask_qty"]
+flowchart LR
+    TOB([tob_valid]) --> PRE[mid, bidq, askq]
+    TRADE([trade_valid]) --> ACC[tflow_acc<br/>16-trade ring]
 
-    IN --> PRE["mid = bid_idx + ask_idx<br/><b>no >> 1</b><br/>bidq = bid_qty >>> QTY_SHIFT<br/>askq = ask_qty >>> QTY_SHIFT"]
+    PRE --> SPR
+    PRE --> TOBI
+    PRE --> OFI
+    PRE --> EMADEV
+    PRE --> MOM
+    ACC --> TFLOW
 
-    PRE --> D1["<b>SPR</b><br/>ask_idx - bid_idx"]
-    PRE --> D2["<b>TOBI</b><br/>bidq - askq"]
-    PRE --> D3["<b>OFI</b><br/>(bidq - prev_bidq)<br/>- (askq - prev_askq)"]
-    PRE --> D4["<b>EMADEV</b><br/>mid - (ema_frac >>> 4)"]
-    PRE --> D5["<b>MOM</b><br/>mid - mid_hist[7]"]
-    ACC["tflow_acc<br/><i>own event stream</i>"] --> D6["<b>TFLOW</b><br/>tflow_acc >>> QTY_SHIFT"]
+    SPR --> SAT[sat16]
+    TOBI --> SAT
+    OFI --> SAT
+    EMADEV --> SAT
+    MOM --> SAT
+    TFLOW --> SAT
 
-    D1 --> S["<b>sat16</b><br/>clamp to signed 16 bits"]
-    D2 --> S
-    D3 --> S
-    D4 --> S
-    D5 --> S
-    D6 --> S
-    S --> OUT(["feat_valid + 6 × int16"])
-
-    D3 -.->|"update"| ST1["prev_bidq, prev_askq"]
-    D4 -.->|"update"| ST2["ema_frac"]
-    D5 -.->|"shift in"| ST3["mid_hist[0..7]"]
-
-    classDef state fill:#f3f4f6,stroke:#9ca3af,stroke-dasharray:3 3
-    class ST1,ST2,ST3 state
+    SAT --> OUT([feat_valid, 6 x int16])
 ```
 
 **The two input streams are independent and unsynchronised** — the structural
@@ -612,17 +586,11 @@ Each feature vector is packed into a 15-byte big-endian frame:
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> IDLE : feat_valid<br/>latch into p_* registers<br/>pend_valid ← 1
-    IDLE --> SENDING : not sending and pend_valid<br/><b>assemble all 15 bytes</b><br/>+ inline checksum<br/>seq++, pend_valid ← 0
-    SENDING --> SENDING : tx_ready<br/>byte_idx++<br/>tx_data ← frame[byte_idx+1]
-    SENDING --> IDLE : byte_idx == 14 and tx_ready<br/>tx_valid ← 0
-    SENDING --> SENDING : feat_valid<br/>replace pending vector
-
-    note right of SENDING
-        tx_valid is held HIGH for the
-        WHOLE frame, which is what makes
-        the arbiter's grant frame-atomic
-    end note
+    IDLE --> IDLE: feat_valid, latch pending
+    IDLE --> SENDING: assemble 15 bytes
+    SENDING --> SENDING: tx_ready, next byte
+    SENDING --> SENDING: feat_valid, replace pending
+    SENDING --> IDLE: last byte accepted
 ```
 
 The transmitter holds **one** pending vector, not a queue. A vector arriving while
@@ -818,22 +786,9 @@ happens to be feeding it.
 
 ```mermaid
 flowchart LR
-    EV(["ev_handoff<br/><i>parser hands a validated<br/>event to the dispatcher</i>"])
-    BK(["book_updated"])
-    TB(["tob_valid"])
-    FT(["feat_valid"])
-
-    EV -->|"<b>t_resolve</b><br/>data dependent"| BK
-    BK -->|"<b>t_book2tob</b><br/>constant 5"| TB
-    TB -->|"<b>t_tob2feat</b><br/>constant 1"| FT
-
-    subgraph EXCL["deliberately EXCLUDED"]
-        X1["UART wire time"]
-        X2["the parser's byte-shifting"]
-    end
-
-    classDef excl fill:#f3f4f6,stroke:#9ca3af,stroke-dasharray:3 3
-    class EXCL,X1,X2 excl
+    EV([ev_handoff]) -->|t_resolve| BK([book_updated])
+    BK -->|t_book2tob = 5| TB([tob_valid])
+    TB -->|t_tob2feat = 1| FT([feat_valid])
 ```
 
 Each stage latches its **own copy** of the originating timestamp rather than
@@ -896,26 +851,15 @@ One USB-UART carries the ITCH feed in and both frame types out:
 
 ```mermaid
 flowchart LR
-    PC(["host<br/>uart_feed.py"])
-    RX["uart_to_axis<br/><i>uart_rx + sync_fifo</i>"]
-    CORE["<b>top_v2</b><br/>the engine"]
-    LINK(["feature frames<br/>15 B, sync 0xA5"])
-    STAT(["status frames<br/>75 B, sync 0x5A"])
-    ARB["axis_arb2<br/>frame-atomic"]
-    TX["axis_to_uart<br/><i>uart_tx</i>"]
-
-    PC -->|"RX pin L14"| RX
-    RX -->|"① m_tdata / tvalid / tready"| CORE
-    CORE --> LINK
-    CORE -.->|"counters"| SR["status_reporter"]
-    SR --> STAT
-    LINK -->|"s0 — priority"| ARB
-    STAT -->|"s1"| ARB
-    ARB --> TX
-    TX -->|"TX pin L15"| PC
-
-    classDef io fill:#fff4e5,stroke:#f59e0b
-    class RX,TX,ARB,SR io
+    PC([host]) -->|RX pin| RXB[uart_to_axis]
+    RXB --> CORE[top_v2]
+    CORE --> FRM([feature frames])
+    CORE -.->|counters| SR[status_reporter]
+    SR --> STF([status frames])
+    FRM --> ARB[axis_arb2]
+    STF --> ARB
+    ARB --> TXB[axis_to_uart]
+    TXB -->|TX pin| PC
 ```
 
 Status frames are triggered by the **RX line going quiet**, never by an in-band

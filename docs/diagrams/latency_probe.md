@@ -14,22 +14,9 @@ Quoting a latency number without stating what it spans is meaningless.
 
 ```mermaid
 flowchart LR
-    EV(["ev_handoff<br/><i>parser hands a validated<br/>event to the dispatcher</i>"])
-    BK(["book_updated"])
-    TB(["tob_valid"])
-    FT(["feat_valid"])
-
-    EV -->|"<b>t_resolve</b><br/>data dependent"| BK
-    BK -->|"<b>t_book2tob</b><br/>constant 5"| TB
-    TB -->|"<b>t_tob2feat</b><br/>constant 1"| FT
-
-    subgraph EXCL["deliberately EXCLUDED"]
-        X1["UART wire time"]
-        X2["the parser's byte-shifting"]
-    end
-
-    classDef excl fill:#f3f4f6,stroke:#9ca3af,stroke-dasharray:3 3
-    class EXCL,X1,X2 excl
+    EV([ev_handoff]) -->|t_resolve| BK([book_updated])
+    BK -->|t_book2tob = 5| TB([tob_valid])
+    TB -->|t_tob2feat = 1| FT([feat_valid])
 ```
 
 > **`t_total` = cycles from `ev_handoff` to the *first* `feat_valid` produced by
@@ -47,17 +34,14 @@ A single "armed" flag would be clobbered constantly.
 sequenceDiagram
     participant D as dispatcher
     participant P as probe
-    participant T as tob_tracker
     participant F as feature_engine
 
-    Note over D: ADD_WAIT returns to IDLE once<br/>book_update drains — but tob_tracker<br/>still owes 4 cycles and the<br/>feature engine 1 more
-    D->>P: event N accepted (ev_handoff)
+    D->>P: event N accepted
     D->>P: book_updated for N
-    D->>P: <b>event N+1 accepted</b>
-    Note over P: a naive single "armed" flag<br/>would be overwritten HERE,<br/>before N's feature emerges
-    T->>P: tob_valid for N
+    D->>P: event N+1 accepted
+    Note over P: a single armed flag would be<br/>overwritten here, before N finishes
     F->>P: feat_valid for N
-    Note over P: correct only because each stage<br/>latches its OWN copy of the<br/>originating timestamp
+    Note over P: correct only because each stage<br/>latches its own timestamp
 ```
 
 So the probe carries three independent timestamp pairs, and every subtract uses
@@ -65,18 +49,12 @@ only registers owned by that stage:
 
 ```mermaid
 flowchart LR
-    S0["<b>stage 0</b><br/>ts_a, valid_a<br/><i>event accepted</i>"]
-    S1["<b>stage 1</b><br/>ts_b = ts_a (origin)<br/>tsb_book = now<br/>valid_b"]
-    S2["<b>stage 2</b><br/>ts_c = ts_b (origin)<br/>tsc_tob = now<br/>valid_c"]
-    S3["<b>stage 3</b><br/>close the measurement"]
-
-    S0 -->|"book_updated<br/>and valid_a"| S1
-    S1 -->|"tob_valid<br/>and valid_b"| S2
-    S2 -->|"feat_valid<br/>and valid_c"| S3
-
-    S1 -.->|"lat_resolve = now - ts_a"| R1(["stage result"])
-    S2 -.->|"lat_book2tob = now - tsb_book"| R2(["stage result"])
-    S3 -.->|"lat_tob2feat = now - tsc_tob<br/>lat_last = now - ts_c"| R3(["stage + total"])
+    S0[stage 0<br/>ts_a, valid_a] -->|book_updated| S1[stage 1<br/>carries origin ts]
+    S1 -->|tob_valid| S2[stage 2<br/>carries origin ts]
+    S2 -->|feat_valid| S3[stage 3<br/>closes the measurement]
+    S1 -.-> R1([lat_resolve])
+    S2 -.-> R2([lat_book2tob])
+    S3 -.-> R3([lat_tob2feat, lat_last])
 ```
 
 Each stage clears its predecessor's valid flag as it takes ownership, so exactly
@@ -86,24 +64,14 @@ one measurement occupies each stage.
 
 ```mermaid
 flowchart TD
-    subgraph RPL["Replace fires book_updated TWICE"]
+    subgraph RPL["Replace fires book_updated twice"]
         direction TB
-        R1["first book_updated<br/>consumes valid_a"]
-        R2["second finds valid_a already low<br/><b>propagates nothing</b>"]
-        R3["hence 'FIRST feature' —<br/>a U is timed on its delete half"]
-        R1 --> R2 --> R3
+        R1[first consumes valid_a] --> R2[second finds it low, ignored] --> R3[a U is timed on its delete half]
     end
-
     subgraph ABD["events that never reach the book"]
         direction TB
-        A1["ev_handoff arrives while<br/>valid_a is still set"]
-        A2["the previous event was abandoned —<br/>order_lookup miss, or a one-sided<br/>book suppressing tob_valid"]
-        A3["<b>lat_unmatched++</b>"]
-        A1 --> A2 --> A3
+        A1[new handoff while valid_a set] --> A2[previous was abandoned] --> A3[lat_unmatched++]
     end
-
-    classDef note fill:#fff4e5,stroke:#f59e0b
-    class R3,A3 note
 ```
 
 **Why `lat_unmatched` has to exist.** Without it the probe would silently attribute
@@ -115,9 +83,9 @@ trustworthy.
 
 ```mermaid
 flowchart LR
-    E1(["ev_handoff<br/>event N"]) -->|"lat_ia = cycle - ts_prev_ev"| E2(["ev_handoff<br/>event N+1"])
-    E2 --> MIN["lat_ia_min<br/><i>smallest seen</i>"]
-    E2 --> LAST["lat_ia_last"]
+    E1([ev_handoff, event N]) -->|interarrival| E2([ev_handoff, event N+1])
+    E2 --> MIN([lat_ia_min])
+    E2 --> LAST([lat_ia_last])
 ```
 
 Under UART, the interval between consecutive events **is** the transport cost. That
@@ -135,15 +103,10 @@ same run, on the same clock:
 
 ```mermaid
 flowchart LR
-    RTL["derived from the RTL<br/><b>before</b> measurement"] --> PRED["t_book2tob = 5<br/>t_tob2feat = 1"]
-    PRED --> SIM["simulation<br/><b>5 and 1</b> ✓"]
-    PRED --> HW["silicon<br/><b>5 and 1</b> ✓"]
-    PRED --> BUG["<b>anything else would be a bug,<br/>not a measurement</b>"]
-
-    classDef good fill:#ecfdf5,stroke:#059669
-    classDef bad fill:#fef2f2,stroke:#dc2626
-    class SIM,HW good
-    class BUG bad
+    RTL[derived from the RTL<br/>before measurement] --> PRED[t_book2tob = 5<br/>t_tob2feat = 1]
+    PRED --> SIM([simulation: 5 and 1])
+    PRED --> HW([silicon: 5 and 1])
+    PRED --> BUG([anything else is a bug,<br/>not a measurement])
 ```
 
 Both stages are fixed-latency chains with no data dependence, so their values were

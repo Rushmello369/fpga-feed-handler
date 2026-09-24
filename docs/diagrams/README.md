@@ -34,10 +34,17 @@ image files, no export step, and they diff as text when the RTL changes.
 | ④ | bare wires | always reflect current state |
 | ⑤ | `*_count[31:0]` | monotonic, cleared only by reset |
 
-**Colour**, where it appears: blue for snapshot/clock paths, amber for the trade
-stream and IO, green for a property that costs nothing or a result that passed, red
-for a hazard or a path that failed. Dashed grey is observation-only — nothing in the
-datapath depends on it.
+**No custom colours.** Every diagram inherits the viewer's Mermaid theme, so it is
+legible in both light and dark. Emphasis is carried by shape and by the prose
+beside it, never by a hardcoded fill — a light fill with theme-coloured text is
+invisible on a dark background.
+
+**Structure in the graph, detail in the text.** Node labels are module or state
+names; edge labels are one to three words. Guards, cycle counts and field offsets
+live in the tables beside each diagram, because Mermaid sizes a label box to its
+text and long labels crowd out the structure they were meant to clarify.
+
+**Dashed edges are observation-only** — nothing in the datapath depends on them.
 
 **Scope.** These describe the design as committed. Where a diagram documents a bug,
 it is one that was found and fixed; the arrangement shown is the fixed one, with the
