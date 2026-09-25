@@ -1,0 +1,18 @@
+Hardware-in-the-loop replay - AX7A200B (Artix-7 XC7A200T) @ 100 MHz
+Capture   : aapl_50000.bin (50,000 NASDAQ TotalView-ITCH 5.0 messages)
+Transport : UART 8-N-1, 1,000,000 baud, COM4
+Command   : py src/uart_feed.py --port COM4 --baud 1000000 --send aapl_50000.bin --golden golden_50k.csv --recv-csv frames_hw.csv
+Golden    : py src/itch_tools.py golden aapl_50000.bin --base 1610800 --window 1024 --out golden_50k.csv
+Date      : 2026-09-25
+Bitstream : build_all.tcl, WNS +0.238 ns / WHS +0.067 ns
+
+sent 1716664 bytes (50000 messages); waiting for frames...
+received 31994 frames in 19.32s  (decoder rejected 0 bad-sync bytes)
+FPGA counters [status seq=0]: msg=50000 unknown=2120 filtered=0 miss=746 oow=15401 drop=0 parse_err=0
+MEASURED LATENCY on silicon  [31756 events]
+  core, event -> feature : min 13 cyc (130 ns) | mean 15.3 cyc (153 ns) | max 18 cyc (180 ns)
+  stage breakdown        : resolve=7  book2tob=5  tob2feat=1
+  transport (interarrival): min 20771 cyc (207.7 us) -> UART is ~1361x slower than the core
+  events with no feature  : 16120  (should equal oow + miss = 16147)
+wrote frames_hw.csv
+golden compare: 31994 frames checked, 0 field mismatches

@@ -151,7 +151,7 @@ module tb_top_uart;
 
         $display("========================================");
         $display("  PASSED: %0d   FAILED: %0d", pass_count, fail_count);
-        $display(fail_count == 0 ? "  ALL TESTS PASSED" : "  THERE ARE FAILURES");
+        $display("%s", fail_count == 0 ? "  ALL TESTS PASSED" : "  THERE ARE FAILURES");
         $display("========================================");
         $finish;
     end

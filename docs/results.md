@@ -355,8 +355,8 @@ events, which under UART is the transport cost:
 | | Measured |
 |---|---|
 | core, event → feature | **153 ns** |
-| transport, minimum interarrival | **20,791 cycles = 207.9 µs** |
-| **ratio** | **~1,363×** |
+| transport, minimum interarrival | **20,771 cycles = 207.7 µs** |
+| **ratio** | **~1,361×** |
 
 For reference, the arithmetic that predicted this: 1 Mbaud 8-N-1 is 10 bits per
 byte, so 10 µs per byte and 100 KB/s; a 33-byte Execute takes 330 µs on the

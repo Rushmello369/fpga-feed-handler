@@ -22,7 +22,7 @@ flowchart LR
 > **`t_total` = cycles from `ev_handoff` to the *first* `feat_valid` produced by
 > that event.**
 
-Excluding the transport is the entire point. The bring-up transport is ~1,363×
+Excluding the transport is the entire point. The bring-up transport is ~1,361×
 slower than the core, so any end-to-end number would be a measurement of the UART,
 not of this pipeline.
 
@@ -96,8 +96,11 @@ same run, on the same clock:
 | | Measured |
 |---|---:|
 | core, event → feature | **153 ns** |
-| transport, minimum interarrival | **20,791 cycles = 207.9 µs** |
-| ratio | **~1,363×** |
+| transport, minimum interarrival | **20,771 cycles = 207.7 µs** |
+| ratio | **~1,361×** |
+
+> `lat_ia_min` is set by host USB scheduling, so it shifts by a few tenths
+> of a percent between runs. The core figure does not move at all.
 
 ## 5. The probe as an assertion, not just an instrument
 

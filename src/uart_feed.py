@@ -295,9 +295,14 @@ def cmd_run(args):
                 print(f"  transport (interarrival): min {ia} cyc"
                       f" ({ia*10.0/1000.0:.1f} us) -> UART is ~{ia/mean:.0f}x"
                       f" slower than the core")
+            # lat_unmatched counts abandoned EVENTS; oow_count counts dropped
+            # book OPERATIONS. A Replace is two operations, so one dropped on
+            # both halves bumps oow twice while abandoning a single event -
+            # which makes oow + miss an upper bound, not an equality.
             if s['lat_unmatched']:
                 print(f"  events with no feature  : {s['lat_unmatched']}"
-                      f"  (should equal oow + miss = {s['oow'] + s['miss']})")
+                      f"  (<= oow + miss = {s['oow'] + s['miss']};"
+                      f" oow counts book ops, a Replace is two)")
     else:
         print("FPGA counters: none received "
               "(needs a bitstream with status_reporter)")

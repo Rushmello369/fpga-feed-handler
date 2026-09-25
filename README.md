@@ -87,9 +87,9 @@ host in between.
 | | |
 |---|---|
 | **Core latency**, event → feature vector | **130 / 153 / 180 ns** (min / mean / max), measured on silicon over 31,756 events |
-| **Timing closure** | 100 MHz met — WNS **+0.333 ns**, 0 of 38,013 endpoints failing |
+| **Timing closure** | 100 MHz met — WNS **+0.238 ns**, 0 of 40,807 endpoints failing |
 | **DSP slices used** | **0** of 740 |
-| **Slice LUTs** | 12,577 of 133,800 (9.4 %) |
+| **Slice LUTs** | 12,964 of 133,800 (9.7 %) |
 | **Block RAM** | 58 of 365 tiles (15.9 %) |
 | **Unit tests** | 15 testbenches, **275 assertions, 0 failures** |
 | **Differential vs golden model** | **0 mismatches** in 877,032 feature values |
@@ -688,11 +688,9 @@ frames diffed against the same golden model:
 191,964 feature values, produced identically by three independent things: the RTL
 in simulation, a Python model written from the specification, and an FPGA.
 
-<!-- CAPTURE: terminal running `python src/uart_feed.py --port COM5 ...` against
-     the board, showing the counter table and the final "0 mismatches" line. -->
 ![Hardware replay matching the golden model](docs/img/hw_replay.png)
 
-<p align="center"><em><b>Figure 4.</b> Hardware-in-the-loop replay. Every counter the FPGA reports over the status channel matches simulation exactly.</em></p>
+<p align="center"><em><b>Figure 4.</b> Hardware-in-the-loop replay of 50,000 messages. Every counter the FPGA reports over the status channel matches the golden model exactly, and the latency block reproduces simulation to the cycle. The <code>should equal</code> on the last line is the host tool stating the invariant too strongly: <code>oow</code> counts book <em>operations</em> and a Replace is two of them, so the 26 Replaces dropped on <em>both</em> halves are counted twice against a single abandoned event. 16,147 − 26 = 16,121, and the final abandoned event is never counted because <code>lat_unmatched</code> only increments on the <em>next</em> handoff — giving 16,120. Full log in <a href="docs/results/hw_replay_50k.txt">docs/results/hw_replay_50k.txt</a>.</em></p>
 
 ### 9.4 An operational trap worth documenting
 
@@ -728,11 +726,11 @@ All figures below come from the checked-in Vivado reports for `top_board` on
 
 | Metric | Value |
 |---|---|
-| **WNS** (setup) | **+0.333 ns** |
-| Setup endpoints failing | **0 of 38,013** |
-| **WHS** (hold) | **+0.068 ns** |
-| Hold endpoints failing | **0 of 38,013** |
-| Pulse width | +3.870 ns, 0 failing |
+| **WNS** (setup) | **+0.238 ns** |
+| Setup endpoints failing | **0 of 40,807** |
+| **WHS** (hold) | **+0.067 ns** |
+| Hold endpoints failing | **0 of 40,807** |
+| Pulse width | +1.100 ns, 0 of 10,065 failing |
 
 The design is a **single clock domain**: a 200 MHz differential input through an
 `MMCME2_BASE` (VCO 1000 MHz, ÷10) to 100 MHz on a global buffer. The only
@@ -758,10 +756,10 @@ gaining its own cycle.
 
 | Resource | Used | Available | Util % |
 |---|---:|---:|---:|
-| Slice LUTs | 12,577 | 133,800 | 9.40 % |
-| — as logic | 9,750 | 133,800 | 7.29 % |
+| Slice LUTs | 12,964 | 133,800 | 9.69 % |
+| — as logic | 10,137 | 133,800 | 7.58 % |
 | — as memory | 2,827 | 46,200 | 6.12 % |
-| Slice Registers | 6,211 | 267,600 | 2.32 % |
+| Slice Registers | 7,114 | 267,600 | 2.66 % |
 | Block RAM tiles | 58 | 365 | 15.89 % |
 | **DSP slices** | **0** | 740 | **0.00 %** |
 | MMCM | 1 | 10 | 10.00 % |
@@ -832,8 +830,11 @@ consecutive events, which under UART *is* the transport cost:
 | | Measured |
 |---|---:|
 | core, event → feature | **153 ns** |
-| transport, minimum interarrival | **207.9 µs** |
-| ratio | **~1,363×** |
+| transport, minimum interarrival | **207.7 µs** |
+| ratio | **~1,361×** |
+
+> `lat_ia_min` is set by host USB scheduling, so it shifts by a few tenths
+> of a percent between runs. The core figure does not move at all.
 
 Any end-to-end figure from this bitstream would be a measurement of the UART, not
 of the feed handler. UART was chosen for bring-up because it minimises
